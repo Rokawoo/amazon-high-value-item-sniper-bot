@@ -2,8 +2,11 @@ import os
 import json
 import time
 import random
+import sys
+import re
+import threading
 import requests
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Union, List
 from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -101,6 +104,233 @@ class AmazonStockChecker:
             bool: True if the product URL exists in the purchase record
         """
         return self.product_url in self.purchase_record
+    
+    def mark_as_purchased(self) -> None:
+        """
+        Mark the current product as purchased in the record file.
+        
+        Updates the purchase record with timestamp and date information.
+        """
+        try:
+            self.purchase_record[self.product_url] = {
+                'purchased_at': time.time(),
+                'date': time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            with open(self.purchase_record_file, 'w') as f:
+                json.dump(self.purchase_record, f)
+            self.purchase_successful = True
+        except Exception:
+            pass
+            
+    def preload_checkout_paths(self) -> None:
+        """
+        Preload checkout pages to improve checkout speed.
+        
+        Caches cart and checkout pages and prepares JavaScript for one-click purchasing.
+        """
+        print("Pre-loading checkout paths to improve speed...")
+        try:
+            # Preload cart page to cache it
+            self.driver.get("https://www.amazon.com/gp/cart/view.html")
+            
+            # Preload checkout page
+            self.driver.get("https://www.amazon.com/gp/checkout/select")
+            
+            # Back to product page
+            self.driver.get(self.product_url)
+            
+            # Prepare one-click script (to bypass regular checkout if possible)
+            self.one_click_js = """
+            // Try to find and click one-click buy button if available
+            const buyNowBtn = document.getElementById('buy-now-button');
+            if (buyNowBtn) {
+                buyNowBtn.click();
+                return true;
+            }
+            
+            // If one-click isn't available, try add to cart
+            const addToCartBtn = document.getElementById('add-to-cart-button');
+            if (addToCartBtn) {
+                addToCartBtn.click();
+                return true;
+            }
+            
+            return false;
+            """
+            
+            print("Checkout paths cached for speed")
+        except Exception:
+            print("Failed to pre-load checkout paths. Will continue anyway.")
+            self.driver.get(self.product_url)
+            
+    def js_purchase_strategy(self) -> None:
+        """
+        Purchase strategy using direct JavaScript execution.
+        
+        This is typically the fastest method for quick checkout.
+        """
+        try:
+            # Step 1: Buy directly using JavaScript (fastest method)
+            self.driver.get(self.product_url)
+            
+            # Execute Buy JS
+            added = self.driver.execute_script(self.one_click_js)
+            if not added:
+                return
+            
+            # If we reach here, proceed to checkout
+            # Look for Place Order button on any page we end up on
+            try:
+                place_order_button = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                )
+                self.driver.execute_script("arguments[0].click();", place_order_button)
+                self.mark_as_purchased()
+            except:
+                # Try to go to checkout directly if we can't find the button
+                try:
+                    self.driver.get("https://www.amazon.com/gp/checkout/select")
+                    place_order_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                    )
+                    self.driver.execute_script("arguments[0].click();", place_order_button)
+                    self.mark_as_purchased()
+                except:
+                    pass
+        except:
+            pass
+    
+    def buy_now_strategy(self) -> None:
+        """
+        Purchase strategy using the Buy Now button.
+        
+        Alternative path if JavaScript execution fails.
+        """
+        try:
+            # Get fresh page
+            self.driver.get(self.product_url)
+            
+            # Click Buy Now button
+            buy_now = WebDriverWait(self.driver, 2).until(
+                EC.element_to_be_clickable((By.ID, "buy-now-button"))
+            )
+            self.driver.execute_script("arguments[0].click();", buy_now)
+            
+            # Try to place order
+            try:
+                place_order_button = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                )
+                self.driver.execute_script("arguments[0].click();", place_order_button)
+                self.mark_as_purchased()
+            except:
+                pass
+        except:
+            pass
+    
+    def cart_strategy(self) -> None:
+        """
+        Purchase strategy using Add to Cart + Express Checkout.
+        
+        Fallback strategy if other methods fail.
+        """
+        try:
+            # Get fresh page
+            self.driver.get(self.product_url)
+            
+            # Add to cart
+            add_to_cart_button = WebDriverWait(self.driver, 2).until(
+                EC.element_to_be_clickable((By.ID, "add-to-cart-button"))
+            )
+            self.driver.execute_script("arguments[0].click();", add_to_cart_button)
+            
+            # Try to skip cart and go straight to checkout
+            try:
+                # First try to find the proceed to checkout button in the add-to-cart success popup
+                proceed_button = WebDriverWait(self.driver, 2).until(
+                    EC.element_to_be_clickable((By.ID, "hlb-ptc-btn-native"))
+                )
+                self.driver.execute_script("arguments[0].click();", proceed_button)
+            except:
+                # If that fails, try to go to cart page
+                try:
+                    self.driver.get("https://www.amazon.com/gp/cart/view.html")
+                    proceed_button = WebDriverWait(self.driver, 2).until(
+                        EC.element_to_be_clickable((By.NAME, "proceedToRetailCheckout"))
+                    )
+                    self.driver.execute_script("arguments[0].click();", proceed_button)
+                except:
+                    # If that fails, try to access checkout directly
+                    self.driver.get("https://www.amazon.com/gp/checkout/select")
+            
+            # Look for the place order button
+            try:
+                place_order_button = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                )
+                self.driver.execute_script("arguments[0].click();", place_order_button)
+                self.mark_as_purchased()
+            except:
+                pass
+        except:
+            pass
+    
+    def ultra_fast_purchase(self) -> bool:
+        """
+        Optimized fast checkout using parallel strategies.
+        
+        Runs three checkout strategies simultaneously for the fastest possible
+        purchase when stock is detected.
+        
+        Returns:
+            bool: True if purchase was successful
+        """
+        if self.has_been_purchased() or self.purchase_attempted:
+            return False
+            
+        self.purchase_attempted = True
+        print("\n🚨 INITIATING LIGHTNING FAST CHECKOUT! 🚨")
+        
+        try:
+            # EXECUTE CRITICAL PATH: THREE PARALLEL STRATEGIES
+            
+            # Strategy 1: Direct JavaScript execution (fastest)
+            js_thread = threading.Thread(target=self.js_purchase_strategy, daemon=True)
+            
+            # Strategy 2: Buy Now button
+            buy_now_thread = threading.Thread(target=self.buy_now_strategy, daemon=True)
+            
+            # Strategy 3: Add to cart + express checkout
+            cart_thread = threading.Thread(target=self.cart_strategy, daemon=True)
+            
+            # Start all strategies simultaneously
+            js_thread.start()
+            buy_now_thread.start()
+            cart_thread.start()
+            
+            # Wait up to 15 seconds for any strategy to complete
+            max_wait = 15
+            start = time.time()
+            while time.time() - start < max_wait:
+                if self.purchase_successful:
+                    print("🔥 ORDER SUCCESSFULLY PLACED! 🔥")
+                    return True
+                time.sleep(0.1)
+            
+            # If no success but we're in checkout, keep browser open for manual completion
+            if "checkout" in self.driver.current_url.lower():
+                print("Automated checkout in progress but not completed.")
+                print("Browser window open for manual completion")
+            else:
+                self.purchase_attempted = False
+                print("Fast checkout failed. Will retry on next stock detection.")
+            
+            return self.purchase_successful
+            
+        except Exception as e:
+            self.purchase_attempted = False
+            print(f"Error during purchase: {str(e)}")
+            return False
     
     def initialize_browser(self) -> None:
         """
@@ -240,6 +470,8 @@ class AmazonStockChecker:
             print("Please complete login manually in the browser window")
             
             input("Press Enter after completing login manually...")
+
+    
 
 def create_env_file() -> bool:
     """
