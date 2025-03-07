@@ -139,6 +139,17 @@ class AmazonUltraFastBot:
         # Initialize browser
         self.initialize_browser()
     
+    def update_price_status(self, price: float, source: str = "Browser") -> None:
+        """
+        Update the terminal with price information without adding new lines.
+        
+        Args:
+            price: The detected price
+            source: Source of the price detection (Browser/API)
+        """
+        message = f"Current price ({source}): ${price:.2f}"
+        SuppressOutput.update_terminal_line(message)
+    
     def signal_handler(self, sig: int, frame: Any) -> None:
         """
         Handle interrupt signals with double-press detection for forced exit.
@@ -608,7 +619,7 @@ class AmazonUltraFastBot:
                 if is_available:
                     price = self.get_product_price()
                     if price is not None:
-                        print(f"Current price: ${price:.2f}")
+                        self.update_price_status(price, "Browser")
                         return price <= self.max_price
             except:
                 pass
@@ -627,7 +638,7 @@ class AmazonUltraFastBot:
                         self.driver.get(self.product_url)
                         price = self.get_product_price()
                         if price is not None:
-                            print(f"Current price: ${price:.2f}")
+                            self.update_price_status(price, "Browser")
                             return price <= self.max_price
             except:
                 pass
@@ -703,7 +714,7 @@ class AmazonUltraFastBot:
                                         pass
                     
                     if price is not None:
-                        print(f"API Check - Current price: ${price:.2f}")
+                        self.update_price_status(price, "API")
                         return price <= self.max_price
                     else:
                         # If we can't determine price but item is in stock, trigger browser check
