@@ -473,12 +473,32 @@ class AmazonStockChecker:
 
     def check_stock_and_price(self):
         """
-        Check if the product is in stock and under the maximum price.
+        Check stock using both HTTP and browser methods for improved speed.
         
         Returns:
             bool: True if product is in stock and price is acceptable
         """
         try:
+            # First try HTTP method (faster)
+            try:
+                response = self.session.get(
+                    self.product_url, 
+                    headers=self.headers, 
+                    timeout=2
+                )
+                content = response.text
+                
+                if "add-to-cart-button" in content and "Currently unavailable" not in content:
+                    # Verify with browser
+                    self.driver.get(self.product_url)
+                    price = self.get_product_price()
+                    if price is not None:
+                        print(f"Current price: ${price:.2f}")
+                        return price <= self.max_price
+            except:
+                pass
+            
+            # Fallback to browser method
             self.driver.get(self.product_url)
             
             # Check for unavailable text
