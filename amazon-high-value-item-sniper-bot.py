@@ -1044,7 +1044,7 @@ def print_animated_logo() -> Tuple[int, str]:
         else:
             os.system('clear')
 
-    program_name = "Roka's Unary Light-Speed Amazon Stock Checker & Auto-Buyer Snipper"
+    program_name = r"Roka's Unary Light-Speed Amazon Stock Checker & Auto-Buyer Snipper"
 
     logo_lines = (
             "                      ███                                                                  █████    ",
@@ -1143,15 +1143,15 @@ def print_animated_logo() -> Tuple[int, str]:
 
 if __name__ == "__main__":
     logo_length, program_name = print_animated_logo()
-    half_logo_length = (logo_length // 2) - len(program_name)
+    half_logo_length = (logo_length - len(program_name)) // 2
 
-    print(f"\n{'='*half_logo_length} \"{program_name}\" {'='*half_logo_length}")
+    print(f"\n{'='*half_logo_length} {program_name} {'='*half_logo_length}")
     print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
     try:
         # Print the absolute path of the .env file
         env_path = Path('.env').absolute()
-        print(f"Environment file location: {env_path}\n{'-'*logo_length}")
+        print(f"\nConfig:\n\tEnvironment file location: {env_path}\n{'-'*logo_length}")
         
         if not create_env_file():
             print("Error: Could not create .env file")
