@@ -1010,12 +1010,12 @@ class AmazonUltraFastBot:
 
 def create_env_file() -> bool:
     """
-    Create .env file with user input if it doesn't exist.
+    Create amazon.env file with user input if it doesn't exist.
     
     Returns:
-        True if .env file exists or was created successfully, False otherwise
+        True if amazon.env file exists or was created successfully, False otherwise
     """
-    env_path = Path('.env')
+    env_path = Path('amazon.env')
     
     if not env_path.exists():
         email = input("Enter your Amazon email: ")
@@ -1149,12 +1149,12 @@ if __name__ == "__main__":
     print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
     try:
-        # Print the absolute path of the .env file
+        # Print the absolute path of the amazon.env file
         env_path = Path('amazon.env').absolute()
-        print(f"\nConfig:\n\tEnvironment file location: {env_path}\n{'-'*logo_length}")
+        print(f"\nConfig:\n-\tEnvironment file location: {env_path}\n{'-'*logo_length}")
         
         if not create_env_file():
-            print("Error: Could not create .env file")
+            print("Error: Could not create amazon.env file")
             sys.exit(1)
         
         load_dotenv()
@@ -1165,7 +1165,7 @@ if __name__ == "__main__":
         product_url = os.getenv("PRODUCT_URL", "https://www.amazon.com/MSI-GeForce-5090-Gaming-Trio/dp/B0DT6Q3BXM")
         
         if not email or not password or not product_url:
-            print("Error: Required environment variables missing from .env file")
+            print("Error: Required environment variables missing from amazon.env file")
             sys.exit(1)
         
         # Create a single bot instance
