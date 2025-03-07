@@ -268,18 +268,44 @@ class AmazonUltraFastBot:
             self.driver.get(self.product_url)
             
             self.one_click_js = """
+            // Try to trigger Buy Now first (highest priority)
             const buyNowBtn = document.getElementById('buy-now-button');
             if (buyNowBtn) {
                 buyNowBtn.click();
+                
+                setTimeout(() => {
+                    const placeOrder = document.getElementById('placeYourOrder');
+                    if (placeOrder) placeOrder.click();
+                }, 100);
+                
                 return true;
             }
-            
+
+            // Try Add to Cart as fallback
             const addToCartBtn = document.getElementById('add-to-cart-button');
             if (addToCartBtn) {
                 addToCartBtn.click();
+                
+                setTimeout(() => {
+                    const miniCartProceed = document.querySelector('#sw-ptc-form .a-button-input');
+                    if (miniCartProceed) {
+                        miniCartProceed.click();
+                        return;
+                    }
+                    
+                    const placeOrder = document.getElementById('placeYourOrder');
+                    if (placeOrder) {
+                        placeOrder.click();
+                        return;
+                    }
+                    
+                    const proceedCheckout = document.getElementById('sc-buy-box-ptc-button');
+                    if (proceedCheckout) proceedCheckout.click();
+                }, 100);
+                
                 return true;
             }
-            
+
             return false;
             """
             
