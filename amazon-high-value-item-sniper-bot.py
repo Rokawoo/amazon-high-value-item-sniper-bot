@@ -200,11 +200,12 @@ class AmazonStockChecker:
         except:
             pass
     
-    def buy_now_strategy(self) -> None:
+    def buy_now_strategy(self):
         """
-        Purchase strategy using the Buy Now button.
+        Faster checkout using Buy Now button.
         
-        Alternative path if JavaScript execution fails.
+        Returns:
+            bool: True if checkout was successful
         """
         try:
             # Get fresh page
@@ -214,25 +215,58 @@ class AmazonStockChecker:
             buy_now = WebDriverWait(self.driver, 2).until(
                 EC.element_to_be_clickable((By.ID, "buy-now-button"))
             )
-            self.driver.execute_script("arguments[0].click();", buy_now)
+            buy_now.click()
             
             # Try to place order
             try:
                 place_order_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
                 )
-                self.driver.execute_script("arguments[0].click();", place_order_button)
+                place_order_button.click()
                 self.mark_as_purchased()
+                return True
             except:
-                pass
+                return False
         except:
-            pass
-    
-    def cart_strategy(self) -> None:
-        """
-        Purchase strategy using Add to Cart + Express Checkout.
+            return False
+
+    def monitor(self):
+        # Update monitor method to use buy_now_strategy
+        print(f"Starting monitoring for: {self.product_url}")
+        print(f"Maximum price set to ${self.max_price:.2f}")
         
-        Fallback strategy if other methods fail.
+        if self.has_been_purchased():
+            print("This product has already been purchased. Monitoring canceled.")
+            return
+            
+        try:
+            while not self.purchase_successful:
+                if self.check_stock_and_price():
+                    print("\nPRODUCT IN STOCK AND UNDER PRICE LIMIT!")
+                    
+                    # Try Buy Now strategy first (faster)
+                    if self.buy_now_strategy():
+                        print("Purchase successful using Buy Now! Monitoring stopped.")
+                        return
+                        
+                    # Fall back to normal checkout
+                    # [existing checkout code]
+                    
+                time.sleep(1)  # Reduced check interval
+                
+        except KeyboardInterrupt:
+            print("\nMonitoring stopped by user.")
+        except Exception as e:
+            print(f"Error occurred: {str(e)}. Restarting monitoring...")
+            time.sleep(5)
+            self.monitor()    
+            
+    def cart_strategy(self):
+        """
+        Checkout strategy using Add to Cart flow.
+        
+        Returns:
+            bool: True if checkout was successful
         """
         try:
             # Get fresh page
@@ -242,7 +276,7 @@ class AmazonStockChecker:
             add_to_cart_button = WebDriverWait(self.driver, 2).until(
                 EC.element_to_be_clickable((By.ID, "add-to-cart-button"))
             )
-            self.driver.execute_script("arguments[0].click();", add_to_cart_button)
+            add_to_cart_button.click()
             
             # Try to skip cart and go straight to checkout
             try:
@@ -250,7 +284,7 @@ class AmazonStockChecker:
                 proceed_button = WebDriverWait(self.driver, 2).until(
                     EC.element_to_be_clickable((By.ID, "hlb-ptc-btn-native"))
                 )
-                self.driver.execute_script("arguments[0].click();", proceed_button)
+                proceed_button.click()
             except:
                 # If that fails, try to go to cart page
                 try:
@@ -258,7 +292,7 @@ class AmazonStockChecker:
                     proceed_button = WebDriverWait(self.driver, 2).until(
                         EC.element_to_be_clickable((By.NAME, "proceedToRetailCheckout"))
                     )
-                    self.driver.execute_script("arguments[0].click();", proceed_button)
+                    proceed_button.click()
                 except:
                     # If that fails, try to access checkout directly
                     self.driver.get("https://www.amazon.com/gp/checkout/select")
@@ -268,12 +302,13 @@ class AmazonStockChecker:
                 place_order_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
                 )
-                self.driver.execute_script("arguments[0].click();", place_order_button)
+                place_order_button.click()
                 self.mark_as_purchased()
+                return True
             except:
-                pass
+                return False
         except:
-            pass
+            return False
     
     def ultra_fast_purchase(self) -> bool:
         """
