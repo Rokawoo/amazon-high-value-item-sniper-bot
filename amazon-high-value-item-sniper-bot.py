@@ -438,12 +438,12 @@ class AmazonUltraFastBot:
             email_field.clear()
             for character in self.email:
                 email_field.send_keys(character)
-                time.sleep(random.uniform(0.05, 0.15))
+                time.sleep(random.uniform(0.02, 0.1))
             
             continue_button = WebDriverWait(self.driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "continue"))
             )
-            time.sleep(0.5)
+            time.sleep(0.2)
             continue_button.click()
             
             password_field = WebDriverWait(self.driver, 10).until(
@@ -453,9 +453,9 @@ class AmazonUltraFastBot:
 
             for character in self.password:
                 password_field.send_keys(character)
-                time.sleep(random.uniform(0.05, 0.15))
+                time.sleep(random.uniform(0.02, 0.1))
             
-            time.sleep(0.5)
+            time.sleep(0.2)
             sign_in_button = WebDriverWait(self.driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "signInSubmit"))
             )
