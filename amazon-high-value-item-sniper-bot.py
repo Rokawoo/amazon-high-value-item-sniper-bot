@@ -125,6 +125,13 @@ class AmazonUltraFastBot:
             'Connection': 'keep-alive',
             'Cache-Control': 'max-age=0'
         }
+        self.current_price = None
+        self.price_source = None
+        self.last_status_update = 0
+        self.status_messages = []
+        self.prev_line_count = 0
+        self.in_stock_prices = []
+
         self.last_status_time = time.time()
         self.check_count = 0
         self.exit_requested = False
@@ -142,14 +149,41 @@ class AmazonUltraFastBot:
     
     def update_price_status(self, price: float, source: str = "Browser") -> None:
         """
-        Update the terminal with price information without adding new lines.
+        Update the current price information without refreshing the display.
         
         Args:
             price: The detected price
             source: Source of the price detection (Browser/API)
         """
-        message = f"Current price ({source}): ${price:.2f}"
-        SuppressOutput.update_terminal_line(message)
+        self.current_price = price
+        self.price_source = source
+        
+        self.update_terminal_display()
+    
+    def update_terminal_display(self) -> None:
+        """
+        Update the terminal with unified display of price, status, and other information.
+        """
+        display_messages = []
+
+        if self.current_price is not None:
+            display_messages.append(f"Current price ({self.price_source}): ${self.current_price:.2f}")
+
+        if hasattr(self, 'check_count') and self.check_count > 0:
+            elapsed = time.time() - self.monitor_start_time
+            checks_per_second = self.check_count / elapsed if elapsed > 0 else 0
+
+            hours, minutes = divmod(int(elapsed), 3600)
+            minutes, seconds = divmod(minutes, 60)
+            time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            
+            display_messages.append(f"Status: {self.check_count:,} checks | Time: {time_formatted} | Rate: {checks_per_second:.2f} checks/sec")
+
+        if self.in_stock_prices:
+            prices_str = ", ".join([f"${p:.2f}" for p in sorted(self.in_stock_prices)])
+            display_messages.append(f"Detected prices: {prices_str}")
+    
+        self.prev_line_count = SuppressOutput.update_multiple_lines(display_messages, self.prev_line_count)
     
     def signal_handler(self, sig: int, frame: Any) -> None:
         """
@@ -1046,28 +1080,25 @@ class AmazonUltraFastBot:
             self.cleanup()
             return
         
-        start_time = time.time()
+        self.monitor_start_time = time.time()
         last_browser_refresh = time.time()
         browser_refresh_interval = 900  # Refresh browser every 15 minutes
         
         api_check_counter = 0
         browser_check_counter = 0
-        prev_line_count = 0
-        in_stock_prices = []
+        self.check_count = 0
         
         try:
             while not self.purchase_successful and not exit_requested:
                 self.check_count += 1
                 api_check_counter += 1
                 
-                status_messages = []
+                force_status_update = self.check_count % 5000 == 0
                 
-                # Use API checks most of the time (faster)
                 if api_check_counter >= 10:
                     api_check_counter = 0
                     browser_check_counter += 1
                     
-                    # Use browser check occasionally
                     if browser_check_counter >= 50:
                         browser_check_counter = 0
                         
@@ -1079,11 +1110,12 @@ class AmazonUltraFastBot:
                         if self.check_stock_and_price():
                             price = self.get_product_price()
                             if price is not None:
-                                if price not in in_stock_prices:
-                                    in_stock_prices.append(price)
+                                if price not in self.in_stock_prices:
+                                    self.in_stock_prices.append(price)
                                 
-                                status_messages.append(f"🚨 PRODUCT IN STOCK! Browser check price: ${price:.2f}")
-                                prev_line_count = SuppressOutput.update_multiple_lines(status_messages, prev_line_count)
+                                self.update_price_status(price, "Browser")
+                                
+                                print(f"\n🚨 PRODUCT IN STOCK! Browser check price: ${price:.2f}")
                                 
                                 if self.ultra_fast_purchase():
                                     print("\nPurchase successful! Monitoring stopped.")
@@ -1091,12 +1123,11 @@ class AmazonUltraFastBot:
                                     return
                                 else:
                                     print("\nContinuing to monitor for another attempt...")
+                                    self.update_terminal_display()
                 
-                # Main check using API (much faster than browser)
                 if self.check_stock_via_api():
                     price = None
                     try:
-                        # Quick API price check
                         response = self.api_session.get(
                             self.product_url, 
                             headers={'Cache-Control': 'no-cache, max-age=0'},
@@ -1110,13 +1141,14 @@ class AmazonUltraFastBot:
                     except:
                         pass
                     
-                    if price is not None and price not in in_stock_prices:
-                        in_stock_prices.append(price)
+                    if price is not None:
+                        self.update_price_status(price, "API")
+                        
+                        if price not in self.in_stock_prices:
+                            self.in_stock_prices.append(price)
                     
-                    status_messages.append(f"🚨 PRODUCT IN STOCK! API check price: ${price:.2f if price else 'unknown'}")
-                    prev_line_count = SuppressOutput.update_multiple_lines(status_messages, prev_line_count)
+                    print(f"\n🚨 PRODUCT IN STOCK! API check price: ${price:.2f if price else 'unknown'}")
                     
-                    # Trigger browser to the product page to prepare for purchase
                     try:
                         self.driver.get(self.product_url)
                     except:
@@ -1128,28 +1160,11 @@ class AmazonUltraFastBot:
                         return
                     else:
                         print("\nContinuing to monitor for another attempt...")
+                        self.update_terminal_display()
                 
-                # Status updates
-                if len(status_messages) > 0 or self.check_count % 5000 == 0:
-                    elapsed = time.time() - start_time
-                    checks_per_second = self.check_count / elapsed
-
-                    hours, minutes = divmod(int(elapsed), 3600)
-                    minutes, seconds = divmod(minutes, 60)
-                    time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                    
-                    status_messages = [
-                        f"Status: {self.check_count:,} checks | Time: {time_formatted}s | Rate: {checks_per_second:.2f} checks/sec"
-                    ]
-                    
-                    # Add any detected prices
-                    if in_stock_prices:
-                        prices_str = ", ".join([f"${p:.2f}" for p in sorted(in_stock_prices)])
-                        status_messages.append(f"Detected prices: {prices_str}")
-                    
-                    prev_line_count = SuppressOutput.update_multiple_lines(status_messages, prev_line_count)
+                if force_status_update:
+                    self.update_terminal_display()
                 
-                # Tighter sleep interval for even faster reactions
                 time.sleep(random.uniform(0.001, self.check_interval))
                     
         except KeyboardInterrupt:
