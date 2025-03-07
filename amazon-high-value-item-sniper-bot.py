@@ -1053,12 +1053,16 @@ class AmazonUltraFastBot:
                         print("\nContinuing to monitor for another attempt...")
                 
                 # Status updates
-                if len(status_messages) > 0 or self.check_count % 1000 == 0:
+                if len(status_messages) > 0 or self.check_count % 5000 == 0:
                     elapsed = time.time() - start_time
                     checks_per_second = self.check_count / elapsed
+
+                    hours, minutes = divmod(int(elapsed), 3600)
+                    minutes, seconds = divmod(minutes, 60)
+                    time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                     
                     status_messages = [
-                        f"Status: {self.check_count:,} checks | Time: {elapsed:.1f}s | Rate: {checks_per_second:.2f} checks/sec"
+                        f"Status: {self.check_count:,} checks | Time: {time_formatted:.1f}s | Rate: {checks_per_second:.2f} checks/sec"
                     ]
                     
                     # Add any detected prices
