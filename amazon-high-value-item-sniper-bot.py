@@ -1145,9 +1145,7 @@ if __name__ == "__main__":
     logo_length, program_name = print_animated_logo()
     half_logo_length = (logo_length // 2) - len(program_name)
 
-    print('=' * half_logo_length, end='')
-    print(f" {program_name} ", end='')
-    print('=' * half_logo_length, end='\n')
+    print(f"\n{'='*half_logo_length} \"{program_name}\" {'='*half_logo_length}")
     print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
     try:
