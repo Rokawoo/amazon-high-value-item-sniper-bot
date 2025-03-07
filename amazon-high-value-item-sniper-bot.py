@@ -472,54 +472,65 @@ class AmazonStockChecker:
             input("Press Enter after completing login manually...")
 
     def check_stock_and_price(self):
-        """
-        Check stock using both HTTP and browser methods for improved speed.
-        
-        Returns:
-            bool: True if product is in stock and price is acceptable
-        """
         try:
-            # First try HTTP method (faster)
+            # Quick check using page source for specific indicators
             try:
-                response = self.session.get(
-                    self.product_url, 
-                    headers=self.headers, 
-                    timeout=2
-                )
-                content = response.text
+                # First try direct JavaScript execution (fastest method)
+                is_available = self.driver.execute_script('''
+                    // Check if add-to-cart button exists and is not disabled
+                    const addToCartBtn = document.getElementById('add-to-cart-button');
+                    if (addToCartBtn && !addToCartBtn.disabled) {
+                        return true;
+                    }
+                    
+                    // Check for buy now button as alternative
+                    const buyNowBtn = document.getElementById('buy-now-button');
+                    if (buyNowBtn && !buyNowBtn.disabled) {
+                        return true;
+                    }
+                    
+                    // Check for unavailable text
+                    const pageText = document.body.innerText;
+                    if (pageText.includes('Currently unavailable')) {
+                        return false;
+                    }
+                    
+                    return false;
+                ''')
                 
-                if "add-to-cart-button" in content and "Currently unavailable" not in content:
-                    # Verify with browser
-                    self.driver.get(self.product_url)
+                if is_available:
+                    # If available via JS check, verify price
                     price = self.get_product_price()
                     if price is not None:
                         print(f"Current price: ${price:.2f}")
                         return price <= self.max_price
             except:
                 pass
-            
-            # Fallback to browser method
-            self.driver.get(self.product_url)
-            
-            # Check for unavailable text
-            page_source = self.driver.page_source
-            if "Currently unavailable" in page_source:
-                return False
                 
-            # Check for Add to Cart button
+            # Fallback to HTTP check
             try:
-                add_to_cart = self.driver.find_element(By.ID, "add-to-cart-button")
-                if not add_to_cart.is_enabled():
-                    return False
+                # Using context manager for better resource management
+                with self.session.get(
+                    self.product_url, 
+                    headers=self.headers, 
+                    timeout=0.5,
+                    stream=True
+                ) as response:
+                    chunk = next(response.iter_content(chunk_size=5000))
+                    content = chunk.decode('utf-8', errors='ignore')
+                    
+                    if "add-to-cart-button" in content and "Currently unavailable" not in content:
+                        # Verify with browser
+                        self.driver.get(self.product_url)
+                        price = self.get_product_price()
+                        if price is not None:
+                            print(f"Current price: ${price:.2f}")
+                            return price <= self.max_price
             except:
-                return False
-                
-            # Check price
-            price = self.get_product_price()
-            if price is not None and price <= self.max_price:
-                return True
-                
+                pass
+            
             return False
+            
         except Exception:
             return False
             
