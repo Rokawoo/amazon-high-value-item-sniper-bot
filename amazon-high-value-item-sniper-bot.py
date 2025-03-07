@@ -675,7 +675,7 @@ class AmazonUltraFastBot:
             
             if "add-to-cart-button" in content and "Currently unavailable" not in content:
                 # Also check for in-stock indicators
-                stock_indicators = ["In Stock", "Only", "left in stock", "Add to Cart"]
+                stock_indicators = ("In Stock", "Only", "left in stock", "Add to Cart")
                 if any(indicator in content for indicator in stock_indicators):
                     # Parse price from response content
                     price = None
@@ -687,11 +687,11 @@ class AmazonUltraFastBot:
                         price = float(price_str.replace('$', '').replace(',', ''))
                     else:
                         # Try other common price patterns
-                        for pattern in [
+                        for pattern in (
                             r'<span class="a-price"[^>]*><span[^>]*>([$])?([0-9,.]+)</span>',
                             r'id="priceblock_ourprice"[^>]*>([$])?([0-9,.]+)',
                             r'id="price_inside_buybox"[^>]*>([$])?([0-9,.]+)'
-                        ]:
+                        ):
                             match = re.search(pattern, content)
                             if match:
                                 price_group = match.group(2) if match.group(2) else match.group(1)
@@ -741,12 +741,12 @@ class AmazonUltraFastBot:
                 pass
             
             # Create threads with specific targets
-            strategies = [
+            strategies = (
                 (self.js_purchase_strategy, "JS Direct"),
                 (self.buy_now_strategy, "Buy Now"),
                 (self.cart_strategy, "Cart"),
                 (self.turbo_cart_strategy, "Turbo Cart")  # New strategy
-            ]
+            )
             
             for strategy_func, name in strategies:
                 thread = threading.Thread(target=strategy_func, daemon=True, name=name)
