@@ -1096,6 +1096,7 @@ def create_env_file(env_path: Path) -> bool:
         password = input("Enter your Amazon password: ")
         max_price = input("Enter maximum price: ")
         product_url = input("Enter Amazon product URL: ")
+        print()
         
         with open(env_path, 'w') as f:
             f.write(f"AMAZON_EMAIL={email}\n")
