@@ -20,20 +20,13 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from dotenv import load_dotenv
 
-# Global variables for cleanup tracking
 exit_requested = False
 exit_in_progress = False
 
 class SuppressOutput:
-    """Context manager to temporarily suppress stdout and stderr output."""
+    """Context manager for terminal output management with optimized display updates."""
     
     def __enter__(self) -> 'SuppressOutput':
-        """
-        Set up output suppression by redirecting stdout and stderr.
-        
-        Returns:
-            SuppressOutput: The context manager instance
-        """
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         sys.stdout = open(os.devnull, 'w')
@@ -78,12 +71,20 @@ class SuppressOutput:
         Returns:
             int: Number of lines printed
         """
-        if prev_line_count > 0:
-            sys.stdout.write(f'\033[{prev_line_count}A')
-            sys.stdout.write('\033[J')
+        if not messages:
+            return 0
+            
+        combined_message = '\n'.join(messages)
         
-        print('\n'.join(messages), end='')
-        sys.stdout.flush()
+        try:
+            if prev_line_count > 0:
+                sys.stdout.write(f'\033[{prev_line_count}A\033[J')
+            
+            print(combined_message, end='')
+            sys.stdout.flush()
+            
+        except Exception:
+            print("\r" + combined_message)
         
         return len(messages)
 
@@ -127,24 +128,22 @@ class AmazonUltraFastBot:
         }
         self.current_price = None
         self.price_source = None
-        self.last_status_update = 0
         self.status_messages = []
         self.prev_line_count = 0
         self.in_stock_prices = []
+        self._price_cache_dirty = True
+        self._cached_price_str = ""
 
         self.last_status_time = time.time()
         self.check_count = 0
         self.exit_requested = False
         self.browser_pid = None
         
-        # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
         
-        # Register at-exit handler as a fallback
         atexit.register(self.cleanup)
         
-        # Initialize browser
         self.initialize_browser()
     
     def update_price_status(self, price: float, source: str = "Browser") -> None:
@@ -158,7 +157,11 @@ class AmazonUltraFastBot:
         self.current_price = price
         self.price_source = source
         
-        self.update_terminal_display()
+        has_new_price = price not in self.in_stock_prices if hasattr(self, 'in_stock_prices') else True
+        
+        if has_new_price:
+            self._price_cache_dirty = True
+            self.update_terminal_display()
     
     def update_terminal_display(self) -> None:
         """
@@ -171,17 +174,21 @@ class AmazonUltraFastBot:
 
         if hasattr(self, 'check_count') and self.check_count > 0:
             elapsed = time.time() - self.monitor_start_time
-            checks_per_second = self.check_count / elapsed if elapsed > 0 else 0
+            checks_per_second = self.check_count // max(elapsed, 1) if elapsed > 1 else self.check_count
 
-            hours, minutes = divmod(int(elapsed), 3600)
-            minutes, seconds = divmod(minutes, 60)
+            hours, rem = divmod(int(elapsed), 3600)
+            minutes, seconds = divmod(rem, 60)
             time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             
-            display_messages.append(f"Status: {self.check_count:,} checks | Time: {time_formatted} | Rate: {checks_per_second:.2f} checks/sec")
+            display_messages.append(f"Status: {self.check_count:,} checks | Time: {time_formatted} | Rate: {checks_per_second} checks/sec")
 
         if self.in_stock_prices:
-            prices_str = ", ".join([f"${p:.2f}" for p in sorted(self.in_stock_prices)])
-            display_messages.append(f"Detected prices: {prices_str}")
+            if self._price_cache_dirty:
+                sorted_prices = sorted(self.in_stock_prices)
+                self._cached_price_str = ", ".join([f"${p:.2f}" for p in sorted_prices])
+                self._price_cache_dirty = False
+            
+            display_messages.append(f"Detected prices: {self._cached_price_str}")
     
         self.prev_line_count = SuppressOutput.update_multiple_lines(display_messages, self.prev_line_count)
     
@@ -359,7 +366,6 @@ class AmazonUltraFastBot:
         with SuppressOutput():
             chrome_options = Options()
             
-            # Enhanced Chrome arguments for maximum speed
             chrome_args = (
                 "--disable-gpu",
                 "--no-sandbox",
@@ -384,7 +390,6 @@ class AmazonUltraFastBot:
                 "--disable-features=TranslateUI",
                 "--disable-translate",
                 "--dns-prefetch-disable",
-                # New optimizations
                 "--disable-web-security",
                 "--disable-site-isolation-trials",
                 "--ignore-certificate-errors",
@@ -411,7 +416,6 @@ class AmazonUltraFastBot:
             for arg in chrome_args:
                 chrome_options.add_argument(arg)
             
-            # Enhanced Chrome preferences
             chrome_prefs = {
                 "profile.default_content_setting_values.notifications": 2,
                 "profile.managed_default_content_settings.images": 1,
@@ -435,7 +439,6 @@ class AmazonUltraFastBot:
             chrome_options.add_experimental_option('excludeSwitches', ('enable-logging', 'enable-automation'))
             chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            # Try using undetected_chromedriver if available
             try:
                 import undetected_chromedriver as uc
                 self.driver = uc.Chrome(options=chrome_options)
@@ -443,14 +446,12 @@ class AmazonUltraFastBot:
                 service = Service(ChromeDriverManager().install())
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
 
-            # Store the browser process ID for clean shutdown
             try:
                 if hasattr(self.driver.service, 'process') and self.driver.service.process:
                     self.browser_pid = self.driver.service.process.pid
             except:
                 pass
             
-            # Set aggressive timeouts
             self.driver.set_page_load_timeout(10)
             self.driver.set_script_timeout(5)
             self.driver.implicitly_wait(0.1)
@@ -458,7 +459,6 @@ class AmazonUltraFastBot:
             print("Browser initialized. Logging in to Amazon...")
             self.login()
             
-            # Preload checkout paths and prepare optimized JavaScript
             self.preload_checkout_paths()
     
     def preload_checkout_paths(self) -> None:
@@ -471,7 +471,6 @@ class AmazonUltraFastBot:
             self.driver.get("https://www.amazon.com/gp/checkout/select")
             self.driver.get(self.product_url)
             
-            # Optimized one-click JavaScript for ultra-fast checkout
             self.one_click_js = """
             // Try to trigger Buy Now first (highest priority)
             const buyNowBtn = document.getElementById('buy-now-button');
@@ -756,7 +755,6 @@ class AmazonUltraFastBot:
             True if stock detected and within price limit, False otherwise
         """
         try:
-            # Use a dedicated session with connection pooling
             if not hasattr(self, 'api_session'):
                 self.api_session = requests.Session()
                 self.api_session.headers.update({
@@ -767,37 +765,30 @@ class AmazonUltraFastBot:
                     'Pragma': 'no-cache',
                     'Cache-Control': 'no-cache'
                 })
-                # Preemptively establish connections
                 try:
                     self.api_session.get('https://www.amazon.com', timeout=0.5)
                 except:
                     pass
             
-            # Use streaming requests to minimize download time
             response = self.api_session.get(
                 self.product_url, 
-                headers={'Cache-Control': 'no-cache, max-age=0'},
+                headers={'Cache-Control': 'no-cache'},
                 timeout=0.5,
                 stream=True
             )
             
-            # Read only the first chunk (typically contains add-to-cart button)
             content = next(response.iter_content(chunk_size=10000)).decode('utf-8', errors='ignore')
             
             if "add-to-cart-button" in content and "Currently unavailable" not in content:
-                # Also check for in-stock indicators
                 stock_indicators = ("In Stock", "Only", "left in stock", "Add to Cart")
                 if any(indicator in content for indicator in stock_indicators):
-                    # Parse price from response content
                     price = None
                     
-                    # Try to extract price from content
                     price_match = re.search(r'\"price\":\s*\"(\$[0-9,.]+)\"', content)
                     if price_match:
                         price_str = price_match.group(1)
                         price = float(price_str.replace('$', '').replace(',', ''))
                     else:
-                        # Try other common price patterns
                         for pattern in (
                             r'<span class="a-price"[^>]*><span[^>]*>([$])?([0-9,.]+)</span>',
                             r'id="priceblock_ourprice"[^>]*>([$])?([0-9,.]+)',
@@ -817,7 +808,6 @@ class AmazonUltraFastBot:
                         self.update_price_status(price, "API")
                         return price <= self.max_price
                     else:
-                        # If we can't determine price but item is in stock, trigger browser check
                         return True
             
             return False
@@ -840,23 +830,21 @@ class AmazonUltraFastBot:
         purchase_threads = []
         
         try:
-            # Set high process priority if possible (platform specific)
             try:
                 import psutil
                 process = psutil.Process(os.getpid())
-                if os.name == 'nt':  # Windows
+                if os.name == 'nt':
                     process.nice(psutil.HIGH_PRIORITY_CLASS)
-                else:  # Unix-based
-                    process.nice(-10)  # Lower value = higher priority
+                else:
+                    process.nice(-10)
             except:
                 pass
             
-            # Create threads with specific targets
             strategies = (
                 (self.js_purchase_strategy, "JS Direct"),
                 (self.buy_now_strategy, "Buy Now"),
                 (self.cart_strategy, "Cart"),
-                (self.turbo_cart_strategy, "Turbo Cart")  # New strategy
+                (self.turbo_cart_strategy, "Turbo Cart")
             )
             
             for strategy_func, name in strategies:
@@ -864,14 +852,12 @@ class AmazonUltraFastBot:
                 thread.start()
                 purchase_threads.append(thread)
             
-            # Spin up additional threads with the fastest strategy to increase chances
             fastest_strategy = self.js_purchase_strategy
-            for i in range(2):  # 2 more threads with the fastest method
+            for i in range(2):
                 thread = threading.Thread(target=fastest_strategy, daemon=True, name=f"JS Direct {i+2}")
                 thread.start()
                 purchase_threads.append(thread)
             
-            # Wait for success or timeout
             max_wait = 15
             start = time.time()
             while time.time() - start < max_wait:
@@ -990,36 +976,29 @@ class AmazonUltraFastBot:
         New ultra-optimized purchase strategy that combines direct API call and browser actions.
         """
         try:
-            # Direct API call to add to cart (faster than browser)
             product_id_match = re.search(r'/dp/([A-Z0-9]{10})', self.product_url)
             if product_id_match:
                 product_id = product_id_match.group(1)
                 try:
-                    # Direct add to cart API call
                     add_to_cart_url = f"https://www.amazon.com/gp/aws/cart/add.html?ASIN.1={product_id}&Quantity.1=1"
                     self.session.get(add_to_cart_url, timeout=0.5)
                 except:
                     pass
                 
-            # Also try browser method
             self.driver.get(self.product_url)
             
-            # Execute optimized JavaScript for fastest checkout
             self.driver.execute_script("""
             function turboCheckout() {
-                // Try all possible ways to check out at once
                 const buyNowBtn = document.getElementById('buy-now-button');
                 if (buyNowBtn) buyNowBtn.click();
                 
                 const addToCartBtn = document.getElementById('add-to-cart-button');
                 if (addToCartBtn) addToCartBtn.click();
                 
-                // Aggressive approach - try going directly to place order
                 setTimeout(() => {
                     window.location.href = 'https://www.amazon.com/gp/checkout/select';
                 }, 300);
                 
-                // Try clicking any place order button
                 setTimeout(() => {
                     const placeOrderBtns = document.querySelectorAll('[id*="placeYourOrder"], [id*="place-order"]');
                     placeOrderBtns.forEach(btn => btn.click());
@@ -1029,12 +1008,10 @@ class AmazonUltraFastBot:
             turboCheckout();
             """)
             
-            # Directly navigate to checkout page after brief delay
             time.sleep(0.3)
             try:
                 self.driver.get("https://www.amazon.com/gp/checkout/select")
                 
-                # Try to find and click place order button
                 place_order_button = WebDriverWait(self.driver, 3).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
                 )
@@ -1082,18 +1059,21 @@ class AmazonUltraFastBot:
         
         self.monitor_start_time = time.time()
         last_browser_refresh = time.time()
-        browser_refresh_interval = 900  # Refresh browser every 15 minutes
+        browser_refresh_interval = 900
         
         api_check_counter = 0
         browser_check_counter = 0
         self.check_count = 0
+        
+        sleep_min = 0.001
+        sleep_max = min(self.check_interval, 0.1)
         
         try:
             while not self.purchase_successful and not exit_requested:
                 self.check_count += 1
                 api_check_counter += 1
                 
-                force_status_update = self.check_count % 5000 == 0
+                force_status_update = (self.check_count & 0x1387) == 0
                 
                 if api_check_counter >= 10:
                     api_check_counter = 0
@@ -1112,6 +1092,7 @@ class AmazonUltraFastBot:
                             if price is not None:
                                 if price not in self.in_stock_prices:
                                     self.in_stock_prices.append(price)
+                                    self._price_cache_dirty = True
                                 
                                 self.update_price_status(price, "Browser")
                                 
@@ -1130,10 +1111,11 @@ class AmazonUltraFastBot:
                     try:
                         response = self.api_session.get(
                             self.product_url, 
-                            headers={'Cache-Control': 'no-cache, max-age=0'},
-                            timeout=0.5
+                            headers={'Cache-Control': 'no-cache'},
+                            timeout=0.5,
+                            stream=True
                         )
-                        content = response.text
+                        content = next(response.iter_content(10000)).decode('utf-8', errors='ignore')
                         price_match = re.search(r'\"price\":\s*\"(\$[0-9,.]+)\"', content)
                         if price_match:
                             price_str = price_match.group(1)
@@ -1142,36 +1124,38 @@ class AmazonUltraFastBot:
                         pass
                     
                     if price is not None:
-                        self.update_price_status(price, "API")
-                        
                         if price not in self.in_stock_prices:
                             self.in_stock_prices.append(price)
+                            self._price_cache_dirty = True
+                        self.update_price_status(price, "API")
                     
                     print(f"\n🚨 PRODUCT IN STOCK! API check price: ${price:.2f if price else 'unknown'}")
                     
                     try:
                         self.driver.get(self.product_url)
+                        if self.ultra_fast_purchase():
+                            print("\nPurchase successful! Monitoring stopped.")
+                            self.cleanup()
+                            return
                     except:
                         pass
-                        
-                    if self.ultra_fast_purchase():
-                        print("\nPurchase successful! Monitoring stopped.")
-                        self.cleanup()
-                        return
-                    else:
-                        print("\nContinuing to monitor for another attempt...")
-                        self.update_terminal_display()
+                    
+                    print("\nContinuing to monitor for another attempt...")
+                    self.update_terminal_display()
                 
                 if force_status_update:
                     self.update_terminal_display()
                 
-                time.sleep(random.uniform(0.001, self.check_interval))
+                if self.check_count % 100 == 0:
+                    time.sleep(random.uniform(sleep_min, sleep_max))
+                else:
+                    time.sleep(sleep_min)
                     
         except KeyboardInterrupt:
             print("\nMonitoring stopped by user.")
         except Exception as e:
             print(f"\nError occurred: {str(e)}. Restarting monitoring...")
-            time.sleep(5)
+            time.sleep(2)
             if not exit_requested:
                 self.monitor()
         finally:
