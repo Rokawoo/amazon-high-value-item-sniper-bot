@@ -189,7 +189,7 @@ class AmazonUltraFastBot:
                     os._exit(0)
         
         print("\nPress Ctrl+C again within 2 seconds to force exit")
-        time.sleep(0.2)
+        time.sleep(0.1)
         self.last_ctrl_c_time = time.time()
         
         try:
