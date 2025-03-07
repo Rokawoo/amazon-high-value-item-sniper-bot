@@ -1150,7 +1150,7 @@ if __name__ == "__main__":
     
     try:
         # Print the absolute path of the .env file
-        env_path = Path('.env').absolute()
+        env_path = Path('amazon.env').absolute()
         print(f"\nConfig:\n\tEnvironment file location: {env_path}\n{'-'*logo_length}")
         
         if not create_env_file():
