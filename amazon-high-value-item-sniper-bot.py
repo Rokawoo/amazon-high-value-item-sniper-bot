@@ -962,6 +962,7 @@ class AmazonUltraFastBot:
         global exit_requested
         print(f"Starting lightning-fast monitoring for: {self.product_url}")
         print(f"Maximum price set to ${self.max_price:.2f}")
+        print()
         
         if self.has_been_purchased():
             print("This product has already been purchased. Monitoring canceled.")
