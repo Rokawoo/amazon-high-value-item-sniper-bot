@@ -578,6 +578,64 @@ class AmazonStockChecker:
             time.sleep(5)
             self.monitor()
 
+    def extract_price(self, text):
+        """
+        Extract price from text using multiple regex patterns.
+        
+        Args:
+            text (str): Text containing price information
+            
+        Returns:
+            float: Extracted price or None if not found
+        """
+        # Try different price patterns
+        patterns = [
+            r'\$([0-9,]+\.[0-9]{2})',  # $XX.XX
+            r'\$([0-9,]+)',            # $XX
+            r'([0-9,]+\.[0-9]{2})\s*\$',  # XX.XX $
+            r'([0-9,]+\.[0-9]{2})'     # XX.XX
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text)
+            if matches:
+                return float(matches[0].replace(',', ''))
+        return None
+
+    def get_product_price(self):
+        """
+        Extract product price using multiple methods.
+        
+        Returns:
+            float: The product price or None if not found
+        """
+        try:
+            # Try multiple price selectors
+            price_selectors = [
+                "#priceblock_ourprice", 
+                "#priceblock_dealprice", 
+                ".a-price .a-offscreen",
+                "#price_inside_buybox", 
+                ".priceToPay span.a-price-whole"
+            ]
+            
+            for selector in price_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        for element in elements:
+                            price_text = element.text or element.get_attribute("innerHTML")
+                            if price_text:
+                                extracted_price = self.extract_price(price_text)
+                                if extracted_price:
+                                    return extracted_price
+                except:
+                    continue
+            
+            return None
+        except Exception:
+            return None
+
 def create_env_file() -> bool:
     """
     Create a .env file with user input if it doesn't exist.
