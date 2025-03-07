@@ -857,9 +857,9 @@ def print_animated_logo() -> Tuple[int, str]:
 
 if __name__ == "__main__":
     logo_length, program_name = print_animated_logo()
-    half_logo_length = logo_length // 2 - len(program_name)
+    half_logo_length = (logo_length // 2) - len(program_name)
 
-    print(f"{'='*half_logo_length} {program_name} {'='*half_logo_length} ")
+    print(f"{'='*half_logo_length} {program_name} {'='*half_logo_length}")
     print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
     try:
