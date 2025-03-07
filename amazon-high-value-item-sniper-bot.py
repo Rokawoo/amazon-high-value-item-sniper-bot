@@ -350,6 +350,46 @@ class AmazonStockChecker:
         except Exception:
             print("Failed to pre-load checkout paths. Will continue anyway.")
             self.driver.get(self.product_url)
+
+    def js_purchase_strategy(self):
+        """
+        Purchase strategy using direct JavaScript execution.
+        
+        Returns:
+            bool: True if checkout was successful
+        """
+        try:
+            # Step 1: Buy directly using JavaScript (fastest method)
+            self.driver.get(self.product_url)
+            
+            # Execute Buy JS
+            added = self.driver.execute_script(self.one_click_js)
+            if not added:
+                return False
+            
+            # If we reach here, proceed to checkout
+            # Look for Place Order button on any page we end up on
+            try:
+                place_order_button = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                )
+                self.driver.execute_script("arguments[0].click();", place_order_button)
+                self.mark_as_purchased()
+                return True
+            except:
+                # Try to go to checkout directly if we can't find the button
+                try:
+                    self.driver.get("https://www.amazon.com/gp/checkout/select")
+                    place_order_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                    )
+                    self.driver.execute_script("arguments[0].click();", place_order_button)
+                    self.mark_as_purchased()
+                    return True
+                except:
+                    return False
+        except:
+            return False
     
     def ultra_fast_purchase(self) -> bool:
         """
