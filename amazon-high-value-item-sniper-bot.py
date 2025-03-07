@@ -79,7 +79,8 @@ class SuppressOutput:
             int: Number of lines printed
         """
         if prev_line_count > 0:
-            sys.stdout.write(f'\033[{prev_line_count}A')
+            sys.stdout.write('\r')
+            sys.stdout.write(f'\033[{prev_line_count - 1}A')
             sys.stdout.write('\033[J')
         
         print('\n'.join(messages), end='')
