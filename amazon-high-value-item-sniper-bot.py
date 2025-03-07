@@ -383,7 +383,6 @@ class AmazonUltraFastBot:
                 "profile.managed_default_content_settings.images": 1,
                 "disk-cache-size": 4096,
                 "safebrowsing.enabled": False,
-                # New optimizations
                 "profile.managed_default_content_settings.javascript": 1,
                 "profile.default_content_setting_values.cookies": 1,
                 "profile.managed_default_content_settings.plugins": 1,
