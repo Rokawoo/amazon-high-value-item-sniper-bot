@@ -1062,7 +1062,7 @@ class AmazonUltraFastBot:
                     time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                     
                     status_messages = [
-                        f"Status: {self.check_count:,} checks | Time: {time_formatted:.1f}s | Rate: {checks_per_second:.2f} checks/sec"
+                        f"Status: {self.check_count:,} checks | Time: {time_formatted}s | Rate: {checks_per_second:.2f} checks/sec"
                     ]
                     
                     # Add any detected prices
