@@ -1158,7 +1158,7 @@ if __name__ == "__main__":
             print("Error: Could not create amazon.env file")
             sys.exit(1)
         
-        load_dotenv(dotenv_path=Path('amazon.env'))
+        load_dotenv(dotenv_path=env_path, override=True)
         
         email = os.getenv("AMAZON_EMAIL")
         password = os.getenv("AMAZON_PASSWORD")
