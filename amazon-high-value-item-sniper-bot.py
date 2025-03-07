@@ -309,6 +309,47 @@ class AmazonStockChecker:
                 return False
         except:
             return False
+        
+    def preload_checkout_paths(self):
+        """
+        Preload checkout pages to improve checkout speed.
+        
+        Caches cart and checkout pages to reduce load times during checkout.
+        """
+        print("Pre-loading checkout paths to improve speed...")
+        try:
+            # Preload cart page to cache it
+            self.driver.get("https://www.amazon.com/gp/cart/view.html")
+            
+            # Preload checkout page
+            self.driver.get("https://www.amazon.com/gp/checkout/select")
+            
+            # Back to product page
+            self.driver.get(self.product_url)
+            
+            # Prepare one-click script
+            self.one_click_js = """
+            // Try to find and click one-click buy button if available
+            const buyNowBtn = document.getElementById('buy-now-button');
+            if (buyNowBtn) {
+                buyNowBtn.click();
+                return true;
+            }
+            
+            // If one-click isn't available, try add to cart
+            const addToCartBtn = document.getElementById('add-to-cart-button');
+            if (addToCartBtn) {
+                addToCartBtn.click();
+                return true;
+            }
+            
+            return false;
+            """
+            
+            print("Checkout paths cached for speed")
+        except Exception:
+            print("Failed to pre-load checkout paths. Will continue anyway.")
+            self.driver.get(self.product_url)
     
     def ultra_fast_purchase(self) -> bool:
         """
