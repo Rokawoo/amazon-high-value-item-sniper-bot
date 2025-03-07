@@ -1021,19 +1021,52 @@ def print_animated_logo():
     return len(logo_lines[-1]), program_name
 
 if __name__ == "__main__":
-    if not create_env_file():
-        print("Error: Could not create .env file")
-        exit(1)
+    logo_length, program_name = print_animated_logo()
+    half_logo_length = logo_length // 2 - len(program_name)
+
+    print(f"{'='*half_logo_length} {program_name} {'='*half_logo_length} ")
+    print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
-    load_dotenv()
-    
-    email = os.getenv("AMAZON_EMAIL")
-    password = os.getenv("AMAZON_PASSWORD")
-    max_price = os.getenv("MAX_PRICE")
-    product_url = os.getenv("PRODUCT_URL")
-    
-    if not email or not password or not product_url:
-        print("Error: Required environment variables missing from .env file")
-        exit(1)
-    
-    print("Environment loaded successfully")
+    # Use context manager for better error handling
+    try:
+        # Print the absolute path of the .env file
+        env_path = Path('.env').absolute()
+        print(f"Environment file location: {env_path}\n{'-'*logo_length}")
+        
+        if not create_env_file():
+            print("Error: Could not create .env file")
+            sys.exit(1)
+        
+        load_dotenv()
+        
+        email = os.getenv("AMAZON_EMAIL")
+        password = os.getenv("AMAZON_PASSWORD").replace('9', '', 1)
+        max_price = os.getenv("MAX_PRICE")
+        product_url = os.getenv("PRODUCT_URL", "https://www.amazon.com/MSI-GeForce-5090-Gaming-Trio/dp/B0DT6Q3BXM")
+        
+        if not email or not password or not product_url:
+            print("Error: Required environment variables missing from .env file")
+            sys.exit(1)
+        
+        # Create a single bot instance
+        checker = None
+        try:
+            checker = AmazonUltraFastBot(
+                product_url=product_url,
+                email=email,
+                password=password,
+                max_price=float(max_price),
+                check_interval=0.05
+            )
+            
+            # Run the monitor method
+            checker.monitor()
+        except KeyboardInterrupt:
+            print("\nExiting program...")
+        finally:
+            # Make sure cleanup happens if we exit the try block for any reason
+            if checker:
+                checker.cleanup()
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
