@@ -9,6 +9,7 @@ import sys
 import signal
 import atexit
 from pathlib import Path
+from typing import Dict, Any, Optional, Union, Tuple, List, Callable
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -24,20 +25,41 @@ exit_requested = False
 exit_in_progress = False
 
 class SuppressOutput:
-    def __enter__(self):
+    """Context manager to temporarily suppress stdout and stderr output."""
+    
+    def __enter__(self) -> 'SuppressOutput':
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         sys.stdout = open(os.devnull, 'w')
         sys.stderr = open(os.devnull, 'w')
+        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Optional[Any]) -> None:
         sys.stdout.close()
         sys.stderr.close()
         sys.stdout = self._original_stdout
         sys.stderr = self._original_stderr
 
 class AmazonUltraFastBot:
-    def __init__(self, product_url, email, password, max_price=2800.0, check_interval=0.05):
+    """
+    Ultra-fast bot for monitoring Amazon product availability and automatic purchase.
+    
+    This bot continuously monitors a specified Amazon product URL for stock availability
+    and automatically attempts to purchase the item when it becomes available at or below
+    the specified maximum price.
+    """
+    
+    def __init__(self, product_url: str, email: str, password: str, max_price: float = 2800.0, check_interval: float = 0.05) -> None:
+        """
+        Initialize the Amazon Ultra Fast Bot.
+        
+        Args:
+            product_url: URL of the Amazon product to monitor
+            email: Amazon account email
+            password: Amazon account password
+            max_price: Maximum price to trigger purchase (default: 2800.0)
+            check_interval: Time between stock checks in seconds (default: 0.05)
+        """
         self.product_url = product_url
         self.email = email
         self.password = password
@@ -70,35 +92,33 @@ class AmazonUltraFastBot:
         # Initialize browser
         self.initialize_browser()
     
-    def signal_handler(self, sig, frame):
-        """Handle Ctrl+C signal with double-press detection for forced exit"""
+    def signal_handler(self, sig: int, frame: Any) -> None:
+        """
+        Handle interrupt signals with double-press detection for forced exit.
+        
+        Args:
+            sig: Signal number
+            frame: Current stack frame
+        """
         global exit_in_progress, exit_requested
         
-        # Prevent re-entrance
         if exit_in_progress:
             return
             
         current_time = time.time()
         exit_in_progress = True
         
-        # Check if this is a valid second Ctrl+C press
         if hasattr(self, 'last_ctrl_c_time'):
-            # If less than 0.5 seconds passed, it's likely a duplicate signal - ignore it
             if current_time - self.last_ctrl_c_time < 0.5:
                 exit_in_progress = False
                 return
                 
-            # If within 2 seconds, treat as intentional double press
             if current_time - self.last_ctrl_c_time < 2:
                 print("\nForce closing browser and exiting...")
-                # Force quit browser even if in the middle of something
                 try:
                     if self.driver:
-                        # Check if browser is still responsive
                         try:
-                            # A simple test to see if browser is responsive
                             _ = self.driver.current_url
-                            # If we get here, browser is still open, so close it
                             self.driver.quit()
                             print("Browser closed successfully.")
                         except Exception:
@@ -108,38 +128,29 @@ class AmazonUltraFastBot:
                 finally:
                     print("Forcing program termination.")
                     exit_requested = True
-                    # Force exit the program regardless
                     os._exit(0)
         
-        # First Ctrl+C press
         print("\nPress Ctrl+C again within 2 seconds to force exit")
-        # Wait for a moment to avoid duplicate signals
         time.sleep(0.2)
-        self.last_ctrl_c_time = time.time()  # Update with current time after the sleep
+        self.last_ctrl_c_time = time.time()
         
-        # Try normal cleanup first
         try:
             self.cleanup()
         except Exception:
-            # If cleanup fails, continue with program exit
             pass
         
         exit_requested = True
         exit_in_progress = False
         
-        # Exit normally if possible
         sys.exit(0)
             
-    def cleanup(self):
-        """Safely clean up resources, checking if browser is already closed"""
+    def cleanup(self) -> None:
+        """Safely clean up resources, checking if browser is already closed."""
         self.exit_requested = True
         if hasattr(self, 'driver') and self.driver:
             try:
-                # Check if browser is still running before trying to quit
                 try:
-                    # A simple test to see if browser is responsive
                     _ = self.driver.current_url
-                    # If we get here, browser is still open
                     print("Closing browser...")
                     self.driver.quit()
                     print("Browser closed successfully.")
@@ -148,8 +159,10 @@ class AmazonUltraFastBot:
             except Exception as e:
                 print(f"Note: {e}")
         
-    # The rest of the class remains the same
-    def load_purchase_record(self):
+    def load_purchase_record(self) -> None:
+        """
+        Load purchase history from file or create a new one if it doesn't exist.
+        """
         try:
             if os.path.exists(self.purchase_record_file):
                 with open(self.purchase_record_file, 'r') as f:
@@ -161,10 +174,19 @@ class AmazonUltraFastBot:
         except Exception:
             self.purchase_record = {}
             
-    def has_been_purchased(self):
+    def has_been_purchased(self) -> bool:
+        """
+        Check if the current product has already been purchased.
+        
+        Returns:
+            True if product has been purchased, False otherwise
+        """
         return self.product_url in self.purchase_record
         
-    def mark_as_purchased(self):
+    def mark_as_purchased(self) -> None:
+        """
+        Mark the current product as purchased in the purchase record.
+        """
         try:
             self.purchase_record[self.product_url] = {
                 'purchased_at': time.time(),
@@ -176,11 +198,13 @@ class AmazonUltraFastBot:
         except Exception:
             pass
     
-    def initialize_browser(self):
+    def initialize_browser(self) -> None:
+        """
+        Initialize Chrome browser with optimized settings for fast automated checkout.
+        """
         with SuppressOutput():
             chrome_options = Options()
             
-            # Optimize option arguments using tuple for better performance
             chrome_args = (
                 "--disable-gpu",
                 "--no-sandbox",
@@ -231,31 +255,25 @@ class AmazonUltraFastBot:
             print("Browser initialized. Logging in to Amazon...")
             self.login()
             
-            # Pre-load paths for ultra-fast checkout
             self.preload_checkout_paths()
     
-    def preload_checkout_paths(self):
+    def preload_checkout_paths(self) -> None:
+        """
+        Pre-load checkout-related pages to improve purchase speed.
+        """
         print("Pre-loading checkout paths to improve speed...")
         try:
-            # Preload cart page to cache it
             self.driver.get("https://www.amazon.com/gp/cart/view.html")
-            
-            # Preload checkout page
             self.driver.get("https://www.amazon.com/gp/checkout/select")
-            
-            # Back to product page
             self.driver.get(self.product_url)
             
-            # Prepare one-click script (to bypass regular checkout if possible)
             self.one_click_js = """
-            // Try to find and click one-click buy button if available
             const buyNowBtn = document.getElementById('buy-now-button');
             if (buyNowBtn) {
                 buyNowBtn.click();
                 return true;
             }
             
-            // If one-click isn't available, try add to cart
             const addToCartBtn = document.getElementById('add-to-cart-button');
             if (addToCartBtn) {
                 addToCartBtn.click();
@@ -270,11 +288,14 @@ class AmazonUltraFastBot:
             print("Failed to pre-load checkout paths. Will continue anyway.")
             self.driver.get(self.product_url)
     
-    def login(self):
+    def login(self) -> None:
+        """
+        Log in to Amazon using the provided credentials.
+        Handles 2FA if needed.
+        """
         try:
             self.driver.get("https://www.amazon.com/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.com%2F%3Fref_%3Dnav_signin&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=usflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0")
             
-            # Enter email with a slight delay between characters
             email_field = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.ID, "ap_email"))
             )
@@ -286,10 +307,9 @@ class AmazonUltraFastBot:
             continue_button = WebDriverWait(self.driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "continue"))
             )
-            time.sleep(0.5)  # Short pause before clicking
+            time.sleep(0.5)
             continue_button.click()
             
-            # Enter password with a slight delay between characters
             password_field = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.ID, "ap_password"))
             )
@@ -299,13 +319,12 @@ class AmazonUltraFastBot:
                 password_field.send_keys(character)
                 time.sleep(random.uniform(0.05, 0.15))
             
-            time.sleep(0.5)  # Short pause before clicking
+            time.sleep(0.5)
             sign_in_button = WebDriverWait(self.driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "signInSubmit"))
             )
             sign_in_button.click()
             
-            # Check for possible 2FA requirement
             try:
                 WebDriverWait(self.driver, 3).until(
                     EC.presence_of_element_located((By.ID, "auth-mfa-otpcode"))
@@ -320,7 +339,6 @@ class AmazonUltraFastBot:
             except TimeoutException:
                 pass
             
-            # Verify login success
             try:
                 WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((By.ID, "nav-link-accountList"))
@@ -335,7 +353,6 @@ class AmazonUltraFastBot:
                     EC.presence_of_element_located((By.ID, "twotabsearchtextbox"))
                 )
             
-            # Pre-load the product page to warm up the cache
             self.driver.get(self.product_url)
             print("Ready to monitor product for stock")
             
@@ -345,8 +362,16 @@ class AmazonUltraFastBot:
             
             input("Press Enter after completing login manually...")
     
-    def extract_price(self, text):
-        # Precompile price patterns for better performance
+    def extract_price(self, text: str) -> Optional[float]:
+        """
+        Extract price from text containing price information.
+        
+        Args:
+            text: Text containing price information
+            
+        Returns:
+            Extracted price as float or None if no price found
+        """
         if not hasattr(self, 'price_patterns'):
             self.price_patterns = (
                 re.compile(r'\$([0-9,]+\.[0-9]{2})'),
@@ -361,9 +386,14 @@ class AmazonUltraFastBot:
                 return float(matches[0].replace(',', ''))
         return None
     
-    def get_product_price(self):
+    def get_product_price(self) -> Optional[float]:
+        """
+        Get the current price of the product.
+        
+        Returns:
+            Current price as float or None if price couldn't be determined
+        """
         try:
-            # First try JavaScript method (fastest)
             try:
                 price_js = self.driver.execute_script('''
                     const priceElements = [
@@ -399,7 +429,6 @@ class AmazonUltraFastBot:
             except:
                 pass
                 
-            # Use tuple instead of list for selectors (small optimization)
             price_selectors = (
                 "#priceblock_ourprice", "#priceblock_dealprice", ".a-price .a-offscreen",
                 "#price_inside_buybox", ".priceToPay span.a-price-whole"
@@ -423,25 +452,26 @@ class AmazonUltraFastBot:
         except Exception:
             return None
     
-    def check_stock_and_price(self):
+    def check_stock_and_price(self) -> bool:
+        """
+        Check if the product is in stock and within the price limit.
+        
+        Returns:
+            True if product is available and within price limit, False otherwise
+        """
         try:
-            # Quick check using page source for specific indicators
             try:
-                # First try direct JavaScript execution (fastest method)
                 is_available = self.driver.execute_script('''
-                    // Check if add-to-cart button exists and is not disabled
                     const addToCartBtn = document.getElementById('add-to-cart-button');
                     if (addToCartBtn && !addToCartBtn.disabled) {
                         return true;
                     }
                     
-                    // Check for buy now button as alternative
                     const buyNowBtn = document.getElementById('buy-now-button');
                     if (buyNowBtn && !buyNowBtn.disabled) {
                         return true;
                     }
                     
-                    // Check for unavailable text
                     const pageText = document.body.innerText;
                     if (pageText.includes('Currently unavailable')) {
                         return false;
@@ -451,7 +481,6 @@ class AmazonUltraFastBot:
                 ''')
                 
                 if is_available:
-                    # If available via JS check, verify price
                     price = self.get_product_price()
                     if price is not None:
                         print(f"Current price: ${price:.2f}")
@@ -459,9 +488,7 @@ class AmazonUltraFastBot:
             except:
                 pass
                 
-            # Fallback to HTTP check
             try:
-                # Using context manager for better resource management
                 with self.session.get(
                     self.product_url, 
                     headers=self.headers, 
@@ -472,7 +499,6 @@ class AmazonUltraFastBot:
                     content = chunk.decode('utf-8', errors='ignore')
                     
                     if "add-to-cart-button" in content and "Currently unavailable" not in content:
-                        # Verify with browser
                         self.driver.get(self.product_url)
                         price = self.get_product_price()
                         if price is not None:
@@ -486,8 +512,13 @@ class AmazonUltraFastBot:
         except Exception:
             return False
     
-    def ultra_fast_purchase(self):
-        """Ultra-optimized hot path for lightning fast checkout"""
+    def ultra_fast_purchase(self) -> bool:
+        """
+        Execute ultra-fast purchase using multiple parallel strategies.
+        
+        Returns:
+            True if purchase was successful, False otherwise
+        """
         if self.has_been_purchased() or self.purchase_attempted:
             return False
             
@@ -495,23 +526,14 @@ class AmazonUltraFastBot:
         print("\n🚨 INITIATING LIGHTNING FAST CHECKOUT! 🚨")
         
         try:
-            # EXECUTE CRITICAL PATH: THREE PARALLEL STRATEGIES
-            
-            # Strategy 1: Direct JavaScript execution (fastest)
             js_thread = threading.Thread(target=self.js_purchase_strategy, daemon=True)
-            
-            # Strategy 2: Buy Now button
             buy_now_thread = threading.Thread(target=self.buy_now_strategy, daemon=True)
-            
-            # Strategy 3: Add to cart + express checkout
             cart_thread = threading.Thread(target=self.cart_strategy, daemon=True)
             
-            # Start all strategies simultaneously
             js_thread.start()
             buy_now_thread.start()
             cart_thread.start()
             
-            # Wait up to 15 seconds for any strategy to complete
             max_wait = 15
             start = time.time()
             while time.time() - start < max_wait:
@@ -520,7 +542,6 @@ class AmazonUltraFastBot:
                     return True
                 time.sleep(0.1)
             
-            # If no success but we're in checkout, keep browser open for manual completion
             if "checkout" in self.driver.current_url.lower():
                 print("Automated checkout in progress but not completed.")
                 print("Browser window open for manual completion")
@@ -535,19 +556,17 @@ class AmazonUltraFastBot:
             print(f"Error during purchase: {str(e)}")
             return False
     
-    def js_purchase_strategy(self):
-        """Purchase strategy using direct JavaScript execution"""
+    def js_purchase_strategy(self) -> None:
+        """
+        Purchase strategy using direct JavaScript execution.
+        """
         try:
-            # Step 1: Buy directly using JavaScript (fastest method)
             self.driver.get(self.product_url)
             
-            # Execute Buy JS
             added = self.driver.execute_script(self.one_click_js)
             if not added:
                 return
             
-            # If we reach here, proceed to checkout
-            # Look for Place Order button on any page we end up on
             try:
                 place_order_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
@@ -555,7 +574,6 @@ class AmazonUltraFastBot:
                 self.driver.execute_script("arguments[0].click();", place_order_button)
                 self.mark_as_purchased()
             except:
-                # Try to go to checkout directly if we can't find the button
                 try:
                     self.driver.get("https://www.amazon.com/gp/checkout/select")
                     place_order_button = WebDriverWait(self.driver, 5).until(
@@ -568,19 +586,18 @@ class AmazonUltraFastBot:
         except:
             pass
     
-    def buy_now_strategy(self):
-        """Strategy using Buy Now button"""
+    def buy_now_strategy(self) -> None:
+        """
+        Purchase strategy using Buy Now button.
+        """
         try:
-            # Get fresh page
             self.driver.get(self.product_url)
             
-            # Click Buy Now button
             buy_now = WebDriverWait(self.driver, 2).until(
                 EC.element_to_be_clickable((By.ID, "buy-now-button"))
             )
             self.driver.execute_script("arguments[0].click();", buy_now)
             
-            # Try to place order
             try:
                 place_order_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
@@ -592,27 +609,24 @@ class AmazonUltraFastBot:
         except:
             pass
     
-    def cart_strategy(self):
-        """Strategy using Add to Cart + Express Checkout"""
+    def cart_strategy(self) -> None:
+        """
+        Purchase strategy using Add to Cart + Express Checkout.
+        """
         try:
-            # Get fresh page
             self.driver.get(self.product_url)
             
-            # Add to cart
             add_to_cart_button = WebDriverWait(self.driver, 2).until(
                 EC.element_to_be_clickable((By.ID, "add-to-cart-button"))
             )
             self.driver.execute_script("arguments[0].click();", add_to_cart_button)
             
-            # Try to skip cart and go straight to checkout
             try:
-                # First try to find the proceed to checkout button in the add-to-cart success popup
                 proceed_button = WebDriverWait(self.driver, 2).until(
                     EC.element_to_be_clickable((By.ID, "hlb-ptc-btn-native"))
                 )
                 self.driver.execute_script("arguments[0].click();", proceed_button)
             except:
-                # If that fails, try to go to cart page
                 try:
                     self.driver.get("https://www.amazon.com/gp/cart/view.html")
                     proceed_button = WebDriverWait(self.driver, 2).until(
@@ -620,10 +634,8 @@ class AmazonUltraFastBot:
                     )
                     self.driver.execute_script("arguments[0].click();", proceed_button)
                 except:
-                    # If that fails, try to access checkout directly
                     self.driver.get("https://www.amazon.com/gp/checkout/select")
             
-            # Look for the place order button
             try:
                 place_order_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
@@ -635,8 +647,13 @@ class AmazonUltraFastBot:
         except:
             pass
     
-    def refresh_browser_periodically(self):
-        """Periodically refresh the browser to prevent session timeouts"""
+    def refresh_browser_periodically(self) -> bool:
+        """
+        Periodically refresh the browser to prevent session timeouts.
+        
+        Returns:
+            True if refresh was successful, False otherwise
+        """
         try:
             current_url = self.driver.current_url
             if "amazon.com" in current_url and "/checkout/" not in current_url and not self.purchase_attempted:
@@ -650,7 +667,10 @@ class AmazonUltraFastBot:
                 return False
         return False
                 
-    def monitor(self):
+    def monitor(self) -> None:
+        """
+        Main monitoring loop that continuously checks product availability.
+        """
         global exit_requested
         print(f"Starting lightning-fast monitoring for: {self.product_url}")
         print(f"Maximum price set to ${self.max_price:.2f}")
@@ -668,7 +688,6 @@ class AmazonUltraFastBot:
             while not self.purchase_successful and not exit_requested:
                 self.check_count += 1
                 
-                # Show status every 5000 checks
                 current_time = time.time()
                 if self.check_count % 5000 == 0:
                     elapsed = current_time - start_time
@@ -676,16 +695,13 @@ class AmazonUltraFastBot:
                     print(f"Status: {self.check_count} checks performed. Time elapsed: {elapsed:.2f} seconds. Rate: {checks_per_second:.2f} checks/second")
                     self.last_status_time = current_time
                 
-                # Periodic browser refresh to prevent session timeouts
                 if current_time - last_browser_refresh > browser_refresh_interval:
                     self.refresh_browser_periodically()
                     last_browser_refresh = current_time
                 
-                # Check stock and price
                 if self.check_stock_and_price():
                     print("\n🚨 PRODUCT IN STOCK AND UNDER PRICE LIMIT! 🚨")
                     
-                    # Use the new ultra-fast checkout method
                     if self.ultra_fast_purchase():
                         print("Purchase successful! Monitoring stopped.")
                         self.cleanup()
@@ -693,7 +709,6 @@ class AmazonUltraFastBot:
                     else:
                         print("Continuing to monitor for another attempt...")
                 
-                # Short, randomized sleep with emphasis on speed
                 time.sleep(random.uniform(0.005, self.check_interval))
                 
         except KeyboardInterrupt:
@@ -701,14 +716,19 @@ class AmazonUltraFastBot:
         except Exception as e:
             print(f"Error occurred: {str(e)}. Restarting monitoring...")
             time.sleep(5)
-            # Only restart if we haven't requested an exit
             if not exit_requested:
                 self.monitor()
         finally:
             self.cleanup()
 
 
-def create_env_file():
+def create_env_file() -> bool:
+    """
+    Create .env file with user input if it doesn't exist.
+    
+    Returns:
+        True if .env file exists or was created successfully, False otherwise
+    """
     env_path = Path('.env')
     
     if not env_path.exists():
@@ -725,15 +745,16 @@ def create_env_file():
     
     return env_path.exists()
 
-def print_animated_logo():
-    """Prints the logo with a simple typing animation effect and loading bar that works on Windows"""
-
-    # Clear terminal screen in a cross-platform way
-    def clear_screen():
-        # For Windows
+def print_animated_logo() -> Tuple[int, str]:
+    """
+    Prints the logo with a simple typing animation effect and loading bar.
+    
+    Returns:
+        Tuple containing the length of the last line of the logo and the program name
+    """
+    def clear_screen() -> None:
         if os.name == 'nt':
             os.system('cls')
-        # For Mac and Linux (os.name is 'posix')
         else:
             os.system('clear')
 
@@ -841,7 +862,6 @@ if __name__ == "__main__":
     print(f"{'='*half_logo_length} {program_name} {'='*half_logo_length} ")
     print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
-    # Use context manager for better error handling
     try:
         # Print the absolute path of the .env file
         env_path = Path('.env').absolute()
