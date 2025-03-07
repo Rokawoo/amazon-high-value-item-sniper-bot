@@ -1236,7 +1236,7 @@ if __name__ == "__main__":
         email = os.getenv("AMAZON_EMAIL")
         password = os.getenv("AMAZON_PASSWORD")
         max_price = os.getenv("MAX_PRICE")
-        product_url = os.getenv("PRODUCT_URL", "https://www.amazon.com/MSI-GeForce-5090-Gaming-Trio/dp/B0DT6Q3BXM")
+        product_url = os.getenv("PRODUCT_URL")
         
         if not email or not password or not product_url:
             print("Error: Required environment variables missing from amazon.env file")
