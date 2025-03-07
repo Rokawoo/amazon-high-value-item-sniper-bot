@@ -1020,7 +1020,7 @@ def create_env_file() -> bool:
     if not env_path.exists():
         email = input("Enter your Amazon email: ")
         password = input("Enter your Amazon password: ")
-        max_price = input("Enter maximum price (default: $2800.00): ") or "2800.00"
+        max_price = input("Enter maximum price: ")
         product_url = input("Enter Amazon product URL: ")
         
         with open(env_path, 'w') as f:
