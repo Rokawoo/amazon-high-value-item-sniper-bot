@@ -737,6 +737,99 @@ class AmazonStockChecker:
         finally:
             self.cleanup()
 
+    def refresh_browser_periodically(self):
+        """Periodically refresh the browser to prevent session timeouts"""
+        try:
+            current_url = self.driver.current_url
+            if "amazon.com" in current_url and "/checkout/" not in current_url and not self.purchase_attempted:
+                self.driver.refresh()
+                return True
+        except:
+            try:
+                self.driver.get(self.product_url)
+                return True
+            except:
+                return False
+        return False
+
+    def signal_handler(self, sig, frame):
+        """Handle Ctrl+C signal with double-press detection for forced exit"""
+        global exit_in_progress, exit_requested
+        
+        # Prevent re-entrance
+        if exit_in_progress:
+            return
+            
+        current_time = time.time()
+        exit_in_progress = True
+        
+        # Check if this is a valid second Ctrl+C press
+        if hasattr(self, 'last_ctrl_c_time'):
+            # If less than 0.5 seconds passed, it's likely a duplicate signal - ignore it
+            if current_time - self.last_ctrl_c_time < 0.5:
+                exit_in_progress = False
+                return
+                
+            # If within 2 seconds, treat as intentional double press
+            if current_time - self.last_ctrl_c_time < 2:
+                print("\nForce closing browser and exiting...")
+                # Force quit browser even if in the middle of something
+                try:
+                    if self.driver:
+                        # Check if browser is still responsive
+                        try:
+                            # A simple test to see if browser is responsive
+                            _ = self.driver.current_url
+                            # If we get here, browser is still open, so close it
+                            self.driver.quit()
+                            print("Browser closed successfully.")
+                        except Exception:
+                            print("Browser appears to be already closed.")
+                except Exception as e:
+                    print(f"Error while closing browser: {e}")
+                finally:
+                    print("Forcing program termination.")
+                    exit_requested = True
+                    # Force exit the program regardless
+                    os._exit(0)
+        
+        # First Ctrl+C press
+        print("\nPress Ctrl+C again within 2 seconds to force exit")
+        # Wait for a moment to avoid duplicate signals
+        time.sleep(0.2)
+        self.last_ctrl_c_time = time.time()  # Update with current time after the sleep
+        
+        # Try normal cleanup first
+        try:
+            self.cleanup()
+        except Exception:
+            # If cleanup fails, continue with program exit
+            pass
+        
+        exit_requested = True
+        exit_in_progress = False
+        
+        # Exit normally if possible
+        sys.exit(0)
+            
+    def cleanup(self):
+        """Safely clean up resources, checking if browser is already closed"""
+        self.exit_requested = True
+        if hasattr(self, 'driver') and self.driver:
+            try:
+                # Check if browser is still running before trying to quit
+                try:
+                    # A simple test to see if browser is responsive
+                    _ = self.driver.current_url
+                    # If we get here, browser is still open
+                    print("Closing browser...")
+                    self.driver.quit()
+                    print("Browser closed successfully.")
+                except Exception:
+                    print("Browser appears to be already closed.")
+            except Exception as e:
+                print(f"Note: {e}")
+
     def extract_price(self, text):
         """
         Extract price from text using multiple regex patterns.
