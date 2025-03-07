@@ -128,6 +128,7 @@ class AmazonUltraFastBot:
         self.last_status_time = time.time()
         self.check_count = 0
         self.exit_requested = False
+        self.browser_pid = None
         
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -161,63 +162,89 @@ class AmazonUltraFastBot:
         global exit_in_progress, exit_requested
         
         if exit_in_progress:
+            print("\nExit already in progress. Please wait...")
             return
             
         current_time = time.time()
         exit_in_progress = True
         
-        if hasattr(self, 'last_ctrl_c_time'):
-            if current_time - self.last_ctrl_c_time < 0.5:
-                exit_in_progress = False
-                return
-                
-            if current_time - self.last_ctrl_c_time < 2:
-                print("\nForce closing browser and exiting...")
-                try:
-                    if self.driver:
-                        try:
-                            _ = self.driver.current_url
-                            self.driver.quit()
-                            print("Browser closed successfully.")
-                        except Exception:
-                            print("Browser appears to be already closed.")
-                except Exception as e:
-                    print(f"Error while closing browser: {e}")
-                finally:
-                    print("Forcing program termination.")
-                    exit_requested = True
-                    os._exit(0)
+        if hasattr(self, 'last_ctrl_c_time') and current_time - self.last_ctrl_c_time < 2:
+            print("\nForce closing browser and exiting...")
+            self._force_close_browser()
+            print("Forcing program termination.")
+            exit_requested = True
+            os._exit(0)
         
         print("\nPress Ctrl+C again within 2 seconds to force exit")
-        time.sleep(0.1)
         self.last_ctrl_c_time = time.time()
         
-        try:
-            self.cleanup()
-        except Exception:
-            pass
+        self.cleanup()
         
         exit_requested = True
         exit_in_progress = False
         
         sys.exit(0)
+
+    def _force_close_browser(self) -> None:
+        """
+        Force close the browser window using stored PID.
+        """
+        if self.browser_pid:
+            try:
+                if os.name == 'nt':  # Windows
+                    os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
+                else:  # Unix
+                    os.system(f'kill -9 {self.browser_pid}')
+                print(f"Terminated browser process (PID: {self.browser_pid})")
+                self.driver = None  # Prevent further cleanup attempts
+                self.browser_pid = None
+                return
+            except Exception as e:
+                print(f"Error terminating browser process: {e}")
+                
+        # Fallback if PID isn't available
+        if hasattr(self, 'driver') and self.driver:
+            try:
+                self.driver.quit()
+                print("Browser closed via driver quit")
+                self.driver = None
+            except Exception as e:
+                print(f"Error closing browser: {e}")
             
     def cleanup(self) -> None:
         """
         Safely clean up resources, checking if browser is already closed.
         """
         self.exit_requested = True
-        if hasattr(self, 'driver') and self.driver:
+        
+        # Skip if browser is already closed
+        if not hasattr(self, 'driver') or self.driver is None:
+            return
+            
+        print("Closing browser...")
+        
+        # Close via stored PID first if available (most reliable)
+        if self.browser_pid:
             try:
-                try:
-                    _ = self.driver.current_url
-                    print("Closing browser...")
-                    self.driver.quit()
-                    print("Browser closed successfully.")
-                except Exception:
-                    print("Browser appears to be already closed.")
-            except Exception as e:
-                print(f"Note: {e}")
+                if os.name == 'nt':  # Windows
+                    os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
+                else:  # Unix
+                    os.system(f'kill -9 {self.browser_pid}')
+                print(f"Terminated browser process (PID: {self.browser_pid})")
+                self.driver = None  # Prevent further cleanup attempts
+                self.browser_pid = None
+                return
+            except:
+                pass
+        
+        # Fallback to standard quit
+        try:
+            self.driver.quit()
+            print("Browser closed successfully.")
+            self.driver = None
+        except Exception as e:
+            print(f"Note: {e}")
+            self.driver = None
         
     def load_purchase_record(self) -> None:
         """
@@ -349,6 +376,13 @@ class AmazonUltraFastBot:
             except ImportError:
                 service = Service(ChromeDriverManager().install())
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
+
+            # Store the browser process ID for clean shutdown
+            try:
+                if hasattr(self.driver.service, 'process') and self.driver.service.process:
+                    self.browser_pid = self.driver.service.process.pid
+            except:
+                pass
             
             # Set aggressive timeouts
             self.driver.set_page_load_timeout(10)
