@@ -15,8 +15,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
+from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.chrome.options import Options
 from dotenv import load_dotenv
 
@@ -246,9 +246,11 @@ class AmazonUltraFastBot:
         
         try:
             if os.name == 'nt':
-                os.system('taskkill /F /IM chromedriver.exe 2>nul')
+                os.system('taskkill /F /IM msedgedriver.exe 2>nul')
+                os.system('taskkill /F /IM msedge.exe 2>nul')
             else:
-                os.system('pkill -9 -f "chromedriver"')
+                os.system('pkill -9 -f "msedgedriver"')
+                os.system('pkill -9 -f "msedge"')
         except:
             pass
         
@@ -355,13 +357,16 @@ class AmazonUltraFastBot:
     
     def initialize_browser(self) -> None:
         """
-        Initialize Chrome browser with ultra-optimized settings for fastest automated checkout.
+        Initialize Edge browser with ultra-optimized settings for fastest automated checkout.
         """
         with SuppressOutput():
-            chrome_options = Options()
+            from selenium.webdriver.edge.options import Options as EdgeOptions
+            from selenium.webdriver.edge.service import Service as EdgeService
+            from webdriver_manager.microsoft import EdgeChromiumDriverManager
             
-            # Enhanced Chrome arguments for maximum speed
-            chrome_args = (
+            edge_options = EdgeOptions()
+            
+            edge_args = (
                 "--disable-gpu",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
@@ -381,85 +386,41 @@ class AmazonUltraFastBot:
                 "--metrics-recording-only",
                 "--no-first-run",
                 "--safebrowsing-disable-auto-update",
-                "--js-flags=--expose-gc",
                 "--disable-features=TranslateUI",
                 "--disable-translate",
                 "--dns-prefetch-disable",
-                # New optimizations
-                "--disable-web-security",
-                "--disable-site-isolation-trials",
-                "--ignore-certificate-errors",
-                "--disable-setuid-sandbox",
-                "--disable-accelerated-2d-canvas",
-                "--disable-breakpad",
-                "--disable-component-update",
-                "--disable-domain-reliability",
-                "--disable-features=site-per-process",
-                "--disable-ipc-flooding-protection",
-                "--enable-low-end-device-mode",
-                "--disable-speech-api",
-                "--memory-pressure-off",
-                "--mute-audio",
-                "--no-default-browser-check",
-                "--no-pings",
-                "--no-report-upload",
-                "--no-zygote",
-                "--disable-threaded-animation",
-                "--disable-threaded-scrolling",
-                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
             )
             
-            for arg in chrome_args:
-                chrome_options.add_argument(arg)
+            for arg in edge_args:
+                edge_options.add_argument(arg)
             
-            # Enhanced Chrome preferences
-            chrome_prefs = {
+            edge_prefs = {
                 "profile.default_content_setting_values.notifications": 2,
                 "profile.managed_default_content_settings.images": 1,
-                "disk-cache-size": 4096,
                 "safebrowsing.enabled": False,
-                "profile.managed_default_content_settings.javascript": 1,
-                "profile.default_content_setting_values.cookies": 1,
-                "profile.managed_default_content_settings.plugins": 1,
-                "profile.default_content_setting_values.popups": 2,
-                "profile.managed_default_content_settings.geolocation": 2,
-                "profile.managed_default_content_settings.media_stream": 2,
-                "profile.managed_default_content_settings.automatic_downloads": 1,
-                "download.prompt_for_download": False,
-                "download.directory_upgrade": True,
-                "credentials_enable_service": False,
-                "password_manager_enabled": False,
                 "profile.password_manager_enabled": False
             }
-            chrome_options.add_experimental_option("prefs", chrome_prefs)
+            edge_options.add_experimental_option("prefs", edge_prefs)
             
-            chrome_options.add_experimental_option('excludeSwitches', ('enable-logging', 'enable-automation'))
-            chrome_options.add_experimental_option('useAutomationExtension', False)
+            edge_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
+            edge_options.add_experimental_option('useAutomationExtension', False)
             
-            # Try using undetected_chromedriver if available
-            try:
-                import undetected_chromedriver as uc
-                self.driver = uc.Chrome(options=chrome_options)
-            except ImportError:
-                service = Service(ChromeDriverManager().install())
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            service = EdgeService(EdgeChromiumDriverManager().install())
+            self.driver = webdriver.Edge(service=service, options=edge_options)
 
-            # Store the browser process ID for clean shutdown
             try:
                 if hasattr(self.driver.service, 'process') and self.driver.service.process:
                     self.browser_pid = self.driver.service.process.pid
             except:
                 pass
             
-            # Set aggressive timeouts
             self.driver.set_page_load_timeout(10)
             self.driver.set_script_timeout(5)
             self.driver.implicitly_wait(0.1)
             
-            print("Browser initialized. Logging in to Amazon...")
+            print("Edge browser initialized. Logging in to Amazon...")
             self.login()
             
-            # Preload checkout paths and prepare optimized JavaScript
             self.preload_checkout_paths()
     
     def preload_checkout_paths(self) -> None:
