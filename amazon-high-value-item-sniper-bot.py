@@ -82,7 +82,7 @@ class SuppressOutput:
             sys.stdout.write(f'\033[{prev_line_count}A')
             sys.stdout.write('\033[J')
         
-        print('\n'.join(messages))
+        print('\n'.join(messages), end='')
         sys.stdout.flush()
         
         return len(messages)
@@ -1053,7 +1053,7 @@ class AmazonUltraFastBot:
                         print("\nContinuing to monitor for another attempt...")
                 
                 # Status updates
-                if self.check_count % 1000 == 0 or len(status_messages) > 0:
+                if len(status_messages) > 0 or self.check_count % 1000 == 0:
                     elapsed = time.time() - start_time
                     checks_per_second = self.check_count / elapsed
                     
