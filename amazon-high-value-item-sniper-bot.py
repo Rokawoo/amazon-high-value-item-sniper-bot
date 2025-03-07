@@ -181,7 +181,7 @@ class AmazonUltraFastBot:
         self.cleanup()
         self._verify_browser_closed()
         
-        time.sleep(0.5)
+        time.sleep(0.2)
         
         exit_requested = True
         exit_in_progress = False
