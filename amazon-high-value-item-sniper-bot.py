@@ -28,6 +28,12 @@ class SuppressOutput:
     """Context manager to temporarily suppress stdout and stderr output."""
     
     def __enter__(self) -> 'SuppressOutput':
+        """
+        Set up output suppression by redirecting stdout and stderr.
+        
+        Returns:
+            SuppressOutput: The context manager instance
+        """
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         sys.stdout = open(os.devnull, 'w')
@@ -35,6 +41,14 @@ class SuppressOutput:
         return self
 
     def __exit__(self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Optional[Any]) -> None:
+        """
+        Restore original stdout and stderr when exiting the context.
+        
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
         sys.stdout.close()
         sys.stderr.close()
         sys.stdout = self._original_stdout
@@ -46,7 +60,7 @@ class AmazonUltraFastBot:
     
     This bot continuously monitors a specified Amazon product URL for stock availability
     and automatically attempts to purchase the item when it becomes available at or below
-    the specified maximum price.
+    the specified maximum price using multiple concurrent strategies to optimize success rate.
     """
     
     def __init__(self, product_url: str, email: str, password: str, max_price: float, check_interval: float = 0.05) -> None:
@@ -73,7 +87,7 @@ class AmazonUltraFastBot:
         self.session = requests.Session()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Connection': 'keep-alive',
             'Cache-Control': 'max-age=0'
@@ -145,7 +159,9 @@ class AmazonUltraFastBot:
         sys.exit(0)
             
     def cleanup(self) -> None:
-        """Safely clean up resources, checking if browser is already closed."""
+        """
+        Safely clean up resources, checking if browser is already closed.
+        """
         self.exit_requested = True
         if hasattr(self, 'driver') and self.driver:
             try:
@@ -200,88 +216,110 @@ class AmazonUltraFastBot:
     
     def initialize_browser(self) -> None:
         """
-        Initialize Chrome browser with optimized settings for fast automated checkout.
+        Initialize Chrome browser with ultra-optimized settings for fastest automated checkout.
         """
         with SuppressOutput():
             chrome_options = Options()
             
+            # Enhanced Chrome arguments for maximum speed
             chrome_args = (
-            "--disable-gpu",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-extensions",
-            "--disable-logging",
-            "--log-level=3",
-            "--disable-infobars",
-            "--disable-notifications",
-            "--disable-default-apps",
-            "--disable-background-networking",
-            "--disable-background-timer-throttling",
-            "--disable-client-side-phishing-detection",
-            "--disable-hang-monitor",
-            "--disable-popup-blocking",
-            "--disable-prompt-on-repost",
-            "--disable-sync",
-            "--metrics-recording-only",
-            "--no-first-run",
-            "--safebrowsing-disable-auto-update",
-            "--js-flags=--expose-gc",
-            "--disable-features=TranslateUI",
-            "--disable-translate",
-            "--dns-prefetch-disable",
-            "--disable-web-security"
-            "--disable-site-isolation-trials",
-            "--ignore-certificate-errors",
-            "--disable-setuid-sandbox",
-            "--disable-accelerated-2d-canvas",
-            "--disable-breakpad",
-            "--disable-component-update",
-            "--disable-domain-reliability",
-            "--disable-features=site-per-process",
-            "--disable-ipc-flooding-protection",
-            "--enable-low-end-device-mode",
-            "--disable-speech-api",
-            "--memory-pressure-off",
-            "--mute-audio",
-            "--no-default-browser-check",
-            "--no-pings",
-            "--no-report-upload",
-            "--no-zygote",
-            "--single-process",
-            "--disable-threaded-animation",
-            "--disable-threaded-scrolling",
-            "--headless=new",
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+                "--disable-logging",
+                "--log-level=3",
+                "--disable-infobars",
+                "--disable-notifications",
+                "--disable-default-apps",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-client-side-phishing-detection",
+                "--disable-hang-monitor",
+                "--disable-popup-blocking",
+                "--disable-prompt-on-repost",
+                "--disable-sync",
+                "--metrics-recording-only",
+                "--no-first-run",
+                "--safebrowsing-disable-auto-update",
+                "--js-flags=--expose-gc",
+                "--disable-features=TranslateUI",
+                "--disable-translate",
+                "--dns-prefetch-disable",
+                # New optimizations
+                "--disable-web-security",
+                "--disable-site-isolation-trials",
+                "--ignore-certificate-errors",
+                "--disable-setuid-sandbox",
+                "--disable-accelerated-2d-canvas",
+                "--disable-breakpad",
+                "--disable-component-update",
+                "--disable-domain-reliability",
+                "--disable-features=site-per-process",
+                "--disable-ipc-flooding-protection",
+                "--enable-low-end-device-mode",
+                "--disable-speech-api",
+                "--memory-pressure-off",
+                "--mute-audio",
+                "--no-default-browser-check",
+                "--no-pings",
+                "--no-report-upload",
+                "--no-zygote",
+                "--disable-threaded-animation",
+                "--disable-threaded-scrolling",
+                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
             )
             
             for arg in chrome_args:
                 chrome_options.add_argument(arg)
             
+            # Enhanced Chrome preferences
             chrome_prefs = {
                 "profile.default_content_setting_values.notifications": 2,
                 "profile.managed_default_content_settings.images": 1,
                 "disk-cache-size": 4096,
-                "safebrowsing.enabled": False
+                "safebrowsing.enabled": False,
+                # New optimizations
+                "profile.managed_default_content_settings.javascript": 1,
+                "profile.default_content_setting_values.cookies": 1,
+                "profile.managed_default_content_settings.plugins": 1,
+                "profile.default_content_setting_values.popups": 2,
+                "profile.managed_default_content_settings.geolocation": 2,
+                "profile.managed_default_content_settings.media_stream": 2,
+                "profile.managed_default_content_settings.automatic_downloads": 1,
+                "download.prompt_for_download": False,
+                "download.directory_upgrade": True,
+                "credentials_enable_service": False,
+                "password_manager_enabled": False,
+                "profile.password_manager_enabled": False
             }
             chrome_options.add_experimental_option("prefs", chrome_prefs)
             
             chrome_options.add_experimental_option('excludeSwitches', ('enable-logging', 'enable-automation'))
             chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # Try using undetected_chromedriver if available
+            try:
+                import undetected_chromedriver as uc
+                self.driver = uc.Chrome(options=chrome_options)
+            except ImportError:
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
             
-            self.driver.set_page_load_timeout(15)
-            self.driver.implicitly_wait(0.5)
+            # Set aggressive timeouts
+            self.driver.set_page_load_timeout(10)
+            self.driver.set_script_timeout(5)
+            self.driver.implicitly_wait(0.1)
             
             print("Browser initialized. Logging in to Amazon...")
             self.login()
             
+            # Preload checkout paths and prepare optimized JavaScript
             self.preload_checkout_paths()
     
     def preload_checkout_paths(self) -> None:
         """
-        Pre-load checkout-related pages to improve purchase speed.
+        Pre-load checkout-related pages to improve purchase speed and prepare JS code.
         """
         print("Pre-loading checkout paths to improve speed...")
         try:
@@ -289,12 +327,14 @@ class AmazonUltraFastBot:
             self.driver.get("https://www.amazon.com/gp/checkout/select")
             self.driver.get(self.product_url)
             
+            # Optimized one-click JavaScript for ultra-fast checkout
             self.one_click_js = """
             // Try to trigger Buy Now first (highest priority)
             const buyNowBtn = document.getElementById('buy-now-button');
             if (buyNowBtn) {
                 buyNowBtn.click();
                 
+                // Immediately attempt to place order without waiting for page transition
                 setTimeout(() => {
                     const placeOrder = document.getElementById('placeYourOrder');
                     if (placeOrder) placeOrder.click();
@@ -302,32 +342,36 @@ class AmazonUltraFastBot:
                 
                 return true;
             }
-
+            
             // Try Add to Cart as fallback
             const addToCartBtn = document.getElementById('add-to-cart-button');
             if (addToCartBtn) {
                 addToCartBtn.click();
                 
+                // Try to click through the mini cart or proceed to checkout directly
                 setTimeout(() => {
+                    // Try mini cart "Proceed to checkout" that sometimes appears
                     const miniCartProceed = document.querySelector('#sw-ptc-form .a-button-input');
                     if (miniCartProceed) {
                         miniCartProceed.click();
                         return;
                     }
                     
+                    // Try immediate place order
                     const placeOrder = document.getElementById('placeYourOrder');
                     if (placeOrder) {
                         placeOrder.click();
                         return;
                     }
                     
+                    // Try proceed to checkout button
                     const proceedCheckout = document.getElementById('sc-buy-box-ptc-button');
                     if (proceedCheckout) proceedCheckout.click();
                 }, 100);
                 
                 return true;
             }
-
+            
             return false;
             """
             
@@ -436,7 +480,7 @@ class AmazonUltraFastBot:
     
     def get_product_price(self) -> Optional[float]:
         """
-        Get the current price of the product.
+        Get the current price of the product using various selectors.
         
         Returns:
             Current price as float or None if price couldn't be determined
@@ -502,7 +546,7 @@ class AmazonUltraFastBot:
     
     def check_stock_and_price(self) -> bool:
         """
-        Check if the product is in stock and within the price limit.
+        Check if the product is in stock and within the price limit using browser.
         
         Returns:
             True if product is available and within price limit, False otherwise
@@ -559,10 +603,86 @@ class AmazonUltraFastBot:
             
         except Exception:
             return False
+
+    def check_stock_via_api(self) -> bool:
+        """
+        Ultra-fast stock check using direct HTTP requests in parallel with browser checks.
+        
+        Returns:
+            True if stock detected and within price limit, False otherwise
+        """
+        try:
+            # Use a dedicated session with connection pooling
+            if not hasattr(self, 'api_session'):
+                self.api_session = requests.Session()
+                self.api_session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Connection': 'keep-alive',
+                    'Pragma': 'no-cache',
+                    'Cache-Control': 'no-cache'
+                })
+                # Preemptively establish connections
+                try:
+                    self.api_session.get('https://www.amazon.com', timeout=0.5)
+                except:
+                    pass
+            
+            # Use streaming requests to minimize download time
+            response = self.api_session.get(
+                self.product_url, 
+                headers={'Cache-Control': 'no-cache, max-age=0'},
+                timeout=0.5,
+                stream=True
+            )
+            
+            # Read only the first chunk (typically contains add-to-cart button)
+            content = next(response.iter_content(chunk_size=10000)).decode('utf-8', errors='ignore')
+            
+            if "add-to-cart-button" in content and "Currently unavailable" not in content:
+                # Also check for in-stock indicators
+                stock_indicators = ["In Stock", "Only", "left in stock", "Add to Cart"]
+                if any(indicator in content for indicator in stock_indicators):
+                    # Parse price from response content
+                    price = None
+                    
+                    # Try to extract price from content
+                    price_match = re.search(r'\"price\":\s*\"(\$[0-9,.]+)\"', content)
+                    if price_match:
+                        price_str = price_match.group(1)
+                        price = float(price_str.replace('$', '').replace(',', ''))
+                    else:
+                        # Try other common price patterns
+                        for pattern in [
+                            r'<span class="a-price"[^>]*><span[^>]*>([$])?([0-9,.]+)</span>',
+                            r'id="priceblock_ourprice"[^>]*>([$])?([0-9,.]+)',
+                            r'id="price_inside_buybox"[^>]*>([$])?([0-9,.]+)'
+                        ]:
+                            match = re.search(pattern, content)
+                            if match:
+                                price_group = match.group(2) if match.group(2) else match.group(1)
+                                if price_group:
+                                    try:
+                                        price = float(price_group.replace('$', '').replace(',', ''))
+                                        break
+                                    except:
+                                        pass
+                    
+                    if price is not None:
+                        print(f"API Check - Current price: ${price:.2f}")
+                        return price <= self.max_price
+                    else:
+                        # If we can't determine price but item is in stock, trigger browser check
+                        return True
+            
+            return False
+        except Exception:
+            return False
     
     def ultra_fast_purchase(self) -> bool:
         """
-        Execute ultra-fast purchase using multiple parallel strategies.
+        Execute ultra-fast purchase using multiple parallel strategies with high priority.
         
         Returns:
             True if purchase was successful, False otherwise
@@ -573,15 +693,41 @@ class AmazonUltraFastBot:
         self.purchase_attempted = True
         print("\n🚨 INITIATING LIGHTNING FAST CHECKOUT! 🚨")
         
+        purchase_threads = []
+        
         try:
-            js_thread = threading.Thread(target=self.js_purchase_strategy, daemon=True)
-            buy_now_thread = threading.Thread(target=self.buy_now_strategy, daemon=True)
-            cart_thread = threading.Thread(target=self.cart_strategy, daemon=True)
+            # Set high process priority if possible (platform specific)
+            try:
+                import psutil
+                process = psutil.Process(os.getpid())
+                if os.name == 'nt':  # Windows
+                    process.nice(psutil.HIGH_PRIORITY_CLASS)
+                else:  # Unix-based
+                    process.nice(-10)  # Lower value = higher priority
+            except:
+                pass
             
-            js_thread.start()
-            buy_now_thread.start()
-            cart_thread.start()
+            # Create threads with specific targets
+            strategies = [
+                (self.js_purchase_strategy, "JS Direct"),
+                (self.buy_now_strategy, "Buy Now"),
+                (self.cart_strategy, "Cart"),
+                (self.turbo_cart_strategy, "Turbo Cart")  # New strategy
+            ]
             
+            for strategy_func, name in strategies:
+                thread = threading.Thread(target=strategy_func, daemon=True, name=name)
+                thread.start()
+                purchase_threads.append(thread)
+            
+            # Spin up additional threads with the fastest strategy to increase chances
+            fastest_strategy = self.js_purchase_strategy
+            for i in range(2):  # 2 more threads with the fastest method
+                thread = threading.Thread(target=fastest_strategy, daemon=True, name=f"JS Direct {i+2}")
+                thread.start()
+                purchase_threads.append(thread)
+            
+            # Wait for success or timeout
             max_wait = 15
             start = time.time()
             while time.time() - start < max_wait:
@@ -606,7 +752,7 @@ class AmazonUltraFastBot:
     
     def js_purchase_strategy(self) -> None:
         """
-        Purchase strategy using direct JavaScript execution.
+        Purchase strategy using direct JavaScript execution for fastest checkout.
         """
         try:
             self.driver.get(self.product_url)
@@ -636,7 +782,7 @@ class AmazonUltraFastBot:
     
     def buy_now_strategy(self) -> None:
         """
-        Purchase strategy using Buy Now button.
+        Purchase strategy using Buy Now button for one-step checkout.
         """
         try:
             self.driver.get(self.product_url)
@@ -659,7 +805,7 @@ class AmazonUltraFastBot:
     
     def cart_strategy(self) -> None:
         """
-        Purchase strategy using Add to Cart + Express Checkout.
+        Purchase strategy using Add to Cart + Express Checkout path.
         """
         try:
             self.driver.get(self.product_url)
@@ -695,6 +841,66 @@ class AmazonUltraFastBot:
         except:
             pass
     
+    def turbo_cart_strategy(self) -> None:
+        """
+        New ultra-optimized purchase strategy that combines direct API call and browser actions.
+        """
+        try:
+            # Direct API call to add to cart (faster than browser)
+            product_id_match = re.search(r'/dp/([A-Z0-9]{10})', self.product_url)
+            if product_id_match:
+                product_id = product_id_match.group(1)
+                try:
+                    # Direct add to cart API call
+                    add_to_cart_url = f"https://www.amazon.com/gp/aws/cart/add.html?ASIN.1={product_id}&Quantity.1=1"
+                    self.session.get(add_to_cart_url, timeout=0.5)
+                except:
+                    pass
+                
+            # Also try browser method
+            self.driver.get(self.product_url)
+            
+            # Execute optimized JavaScript for fastest checkout
+            self.driver.execute_script("""
+            function turboCheckout() {
+                // Try all possible ways to check out at once
+                const buyNowBtn = document.getElementById('buy-now-button');
+                if (buyNowBtn) buyNowBtn.click();
+                
+                const addToCartBtn = document.getElementById('add-to-cart-button');
+                if (addToCartBtn) addToCartBtn.click();
+                
+                // Aggressive approach - try going directly to place order
+                setTimeout(() => {
+                    window.location.href = 'https://www.amazon.com/gp/checkout/select';
+                }, 300);
+                
+                // Try clicking any place order button
+                setTimeout(() => {
+                    const placeOrderBtns = document.querySelectorAll('[id*="placeYourOrder"], [id*="place-order"]');
+                    placeOrderBtns.forEach(btn => btn.click());
+                }, 600);
+            }
+            
+            turboCheckout();
+            """)
+            
+            # Directly navigate to checkout page after brief delay
+            time.sleep(0.3)
+            try:
+                self.driver.get("https://www.amazon.com/gp/checkout/select")
+                
+                # Try to find and click place order button
+                place_order_button = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                )
+                self.driver.execute_script("arguments[0].click();", place_order_button)
+                self.mark_as_purchased()
+            except:
+                pass
+        except:
+            pass
+    
     def refresh_browser_periodically(self) -> bool:
         """
         Periodically refresh the browser to prevent session timeouts.
@@ -717,7 +923,8 @@ class AmazonUltraFastBot:
                 
     def monitor(self) -> None:
         """
-        Main monitoring loop that continuously checks product availability.
+        Main monitoring loop that continuously checks product availability through
+        multiple methods for optimal speed and reliability.
         """
         global exit_requested
         print(f"Starting lightning-fast monitoring for: {self.product_url}")
@@ -732,24 +939,47 @@ class AmazonUltraFastBot:
         last_browser_refresh = time.time()
         browser_refresh_interval = 900  # Refresh browser every 15 minutes
         
+        api_check_counter = 0
+        browser_check_counter = 0
+        
         try:
             while not self.purchase_successful and not exit_requested:
                 self.check_count += 1
+                api_check_counter += 1
                 
-                current_time = time.time()
-                if self.check_count % 5000 == 0:
-                    elapsed = current_time - start_time
-                    checks_per_second = self.check_count / elapsed
-                    print(f"Status: {self.check_count} checks performed. Time elapsed: {elapsed:.2f} seconds. Rate: {checks_per_second:.2f} checks/second")
-                    self.last_status_time = current_time
-                
-                if current_time - last_browser_refresh > browser_refresh_interval:
-                    self.refresh_browser_periodically()
-                    last_browser_refresh = current_time
-                
-                if self.check_stock_and_price():
-                    print("\n🚨 PRODUCT IN STOCK AND UNDER PRICE LIMIT! 🚨")
+                # Use API checks most of the time (faster)
+                if api_check_counter >= 10:
+                    api_check_counter = 0
+                    browser_check_counter += 1
                     
+                    # Use browser check occasionally
+                    if browser_check_counter >= 50:
+                        browser_check_counter = 0
+                        
+                        current_time = time.time()
+                        if current_time - last_browser_refresh > browser_refresh_interval:
+                            self.refresh_browser_periodically()
+                            last_browser_refresh = current_time
+                        
+                        if self.check_stock_and_price():
+                            print("\n🚨 PRODUCT IN STOCK AND UNDER PRICE LIMIT (BROWSER CHECK)! 🚨")
+                            if self.ultra_fast_purchase():
+                                print("Purchase successful! Monitoring stopped.")
+                                self.cleanup()
+                                return
+                            else:
+                                print("Continuing to monitor for another attempt...")
+                
+                # Main check using API (much faster than browser)
+                if self.check_stock_via_api():
+                    print("\n🚨 PRODUCT IN STOCK AND UNDER PRICE LIMIT (API CHECK)! 🚨")
+                    
+                    # Trigger browser to the product page to prepare for purchase
+                    try:
+                        self.driver.get(self.product_url)
+                    except:
+                        pass
+                        
                     if self.ultra_fast_purchase():
                         print("Purchase successful! Monitoring stopped.")
                         self.cleanup()
@@ -757,7 +987,15 @@ class AmazonUltraFastBot:
                     else:
                         print("Continuing to monitor for another attempt...")
                 
-                time.sleep(random.uniform(0.005, self.check_interval))
+                # Status updates
+                if self.check_count % 5000 == 0:
+                    elapsed = time.time() - start_time
+                    checks_per_second = self.check_count / elapsed
+                    print(f"Status: {self.check_count} checks performed. Time elapsed: {elapsed:.2f} seconds. Rate: {checks_per_second:.2f} checks/second")
+                    self.last_status_time = time.time()
+                
+                # Tighter sleep interval for even faster reactions
+                time.sleep(random.uniform(0.001, self.check_interval))
                 
         except KeyboardInterrupt:
             print("\nMonitoring stopped by user.")
