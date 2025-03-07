@@ -1123,7 +1123,7 @@ def print_animated_logo() -> Tuple[int, str]:
         for char in line:
             sys.stdout.write(char)
             sys.stdout.flush()
-            time.sleep(0.000005)  # Fast typing
+            time.sleep(0.000001)  # Fast typing
         
         # Move to next line
         print("")
