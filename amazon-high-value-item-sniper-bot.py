@@ -179,6 +179,9 @@ class AmazonUltraFastBot:
         self.last_ctrl_c_time = time.time()
         
         self.cleanup()
+        self._verify_browser_closed()
+        
+        time.sleep(0.5)
         
         exit_requested = True
         exit_in_progress = False
@@ -187,64 +190,94 @@ class AmazonUltraFastBot:
 
     def _force_close_browser(self) -> None:
         """
-        Force close the browser window using stored PID.
+        Force close the browser window using both PID and process name approach.
         """
-        if self.browser_pid:
-            try:
-                if os.name == 'nt':  # Windows
-                    os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
-                else:  # Unix
-                    os.system(f'kill -9 {self.browser_pid}')
-                print(f"Terminated browser process (PID: {self.browser_pid})")
-                self.driver = None  # Prevent further cleanup attempts
-                self.browser_pid = None
-                return
-            except Exception as e:
-                print(f"Error terminating browser process: {e}")
-                
-        # Fallback if PID isn't available
         if hasattr(self, 'driver') and self.driver:
             try:
                 self.driver.quit()
-                print("Browser closed via driver quit")
-                self.driver = None
-            except Exception as e:
-                print(f"Error closing browser: {e}")
+            except:
+                pass
+        
+        if hasattr(self, 'browser_pid') and self.browser_pid:
+            try:
+                print(f"Terminating browser process (PID: {self.browser_pid})...")
+                if os.name == 'nt':
+                    os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
+                else:
+                    os.system(f'kill -9 {self.browser_pid}')
+                time.sleep(0.5)
+            except:
+                pass
+        
+        try:
+            if os.name == 'nt':
+                os.system('taskkill /F /IM chromedriver.exe 2>nul')
+            else:
+                os.system('pkill -9 -f "chromedriver"')
+        except:
+            pass
+        
+        self.driver = None
+        self.browser_pid = None
+
+    def _verify_browser_closed(self) -> None:
+        """
+        Verify that the browser has actually been closed and clean up if needed.
+        """
+        if hasattr(self, 'browser_pid') and self.browser_pid:
+            try:
+                if os.name == 'nt':
+                    import subprocess
+                    process_check = subprocess.run(f'tasklist /FI "PID eq {self.browser_pid}" /NH', 
+                                                shell=True, 
+                                                capture_output=True, 
+                                                text=True)
+                    if str(self.browser_pid) in process_check.stdout:
+                        print("Browser still running, forcing termination...")
+                        os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
+                else:
+                    import subprocess
+                    process_check = subprocess.run(f'ps -p {self.browser_pid}', 
+                                                shell=True, 
+                                                capture_output=True, 
+                                                text=True)
+                    if str(self.browser_pid) in process_check.stdout:
+                        print("Browser still running, forcing termination...")
+                        os.system(f'kill -9 {self.browser_pid}')
+            except:
+                pass
             
+        self.driver = None
+        self.browser_pid = None
+
     def cleanup(self) -> None:
         """
         Safely clean up resources, checking if browser is already closed.
         """
         self.exit_requested = True
         
-        # Skip if browser is already closed
         if not hasattr(self, 'driver') or self.driver is None:
             return
             
         print("Closing browser...")
         
-        # Close via stored PID first if available (most reliable)
-        if self.browser_pid:
-            try:
-                if os.name == 'nt':  # Windows
-                    os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
-                else:  # Unix
-                    os.system(f'kill -9 {self.browser_pid}')
-                print(f"Terminated browser process (PID: {self.browser_pid})")
-                self.driver = None  # Prevent further cleanup attempts
-                self.browser_pid = None
-                return
-            except:
-                pass
-        
-        # Fallback to standard quit
         try:
             self.driver.quit()
             print("Browser closed successfully.")
-            self.driver = None
         except Exception as e:
-            print(f"Note: {e}")
-            self.driver = None
+            print(f"Error closing browser via driver: {e}")
+            if hasattr(self, 'browser_pid') and self.browser_pid:
+                try:
+                    if os.name == 'nt':
+                        os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
+                    else:
+                        os.system(f'kill -9 {self.browser_pid}')
+                    print(f"Terminated browser process (PID: {self.browser_pid})")
+                except:
+                    pass
+        
+        self.driver = None
+        self.browser_pid = None
         
     def load_purchase_record(self) -> None:
         """
