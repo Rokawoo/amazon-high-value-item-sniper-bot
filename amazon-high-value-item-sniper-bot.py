@@ -1008,15 +1008,16 @@ class AmazonUltraFastBot:
             self.cleanup()
 
 
-def create_env_file() -> bool:
+def create_env_file(env_path: Path) -> bool:
     """
-    Create amazon.env file with user input if it doesn't exist.
+    Create amazon.env file with user input if it doesn't exist in the specified location.
     
+    Args:
+        env_path: Path object representing the full path to the amazon.env file
+        
     Returns:
         True if amazon.env file exists or was created successfully, False otherwise
     """
-    env_path = Path('amazon.env').absolute()
-    
     if not env_path.exists():
         email = input("Enter your Amazon email: ")
         password = input("Enter your Amazon password: ")
@@ -1150,14 +1151,14 @@ if __name__ == "__main__":
     
     try:
         # Print the absolute path of the amazon.env file
-        env_path = Path('amazon.env').absolute()
+        env_path = Path(__file__).parent.absolute() / 'amazon.env'
         print(f"\nConfig:\n>\tEnvironment file location: {env_path}\n{'-'*logo_length}")
         
-        if not create_env_file():
+        if not create_env_file(env_path):
             print("Error: Could not create amazon.env file")
             sys.exit(1)
         
-        load_dotenv()
+        load_dotenv(dotenv_path=Path('amazon.env'))
         
         email = os.getenv("AMAZON_EMAIL")
         password = os.getenv("AMAZON_PASSWORD")
