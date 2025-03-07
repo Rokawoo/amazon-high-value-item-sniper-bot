@@ -1045,7 +1045,7 @@ def print_animated_logo() -> Tuple[int, str]:
         else:
             os.system('clear')
 
-    program_name = r"Roka's Unary Light-Speed Amazon Stock Checker \& Auto-Buyer Snipper"
+    program_name = "Roka's Unary Light-Speed Amazon High Value Product Snipper"
 
     logo_lines = (
             "                      ███                                                                  █████    ",
