@@ -471,7 +471,112 @@ class AmazonStockChecker:
             
             input("Press Enter after completing login manually...")
 
-    
+    def check_stock_and_price(self):
+        """
+        Check if the product is in stock and under the maximum price.
+        
+        Returns:
+            bool: True if product is in stock and price is acceptable
+        """
+        try:
+            self.driver.get(self.product_url)
+            
+            # Check for unavailable text
+            page_source = self.driver.page_source
+            if "Currently unavailable" in page_source:
+                return False
+                
+            # Check for Add to Cart button
+            try:
+                add_to_cart = self.driver.find_element(By.ID, "add-to-cart-button")
+                if not add_to_cart.is_enabled():
+                    return False
+            except:
+                return False
+                
+            # Check price
+            price = self.get_product_price()
+            if price is not None and price <= self.max_price:
+                return True
+                
+            return False
+        except Exception:
+            return False
+            
+    def get_product_price(self):
+        """
+        Extract the product price from the page.
+        
+        Returns:
+            float: The product price or None if not found
+        """
+        try:
+            price_elements = [
+                self.driver.find_element(By.ID, "priceblock_ourprice"),
+                self.driver.find_element(By.ID, "priceblock_dealprice"),
+                self.driver.find_element(By.CSS_SELECTOR, ".a-price .a-offscreen")
+            ]
+            
+            for element in price_elements:
+                try:
+                    price_text = element.text or element.get_attribute("innerHTML")
+                    if price_text:
+                        price_match = re.search(r'\$([0-9,]+\.[0-9]{2})', price_text)
+                        if price_match:
+                            return float(price_match.group(1).replace(',', ''))
+                except:
+                    continue
+                    
+            return None
+        except:
+            return None
+            
+    def monitor(self):
+        """
+        Monitor the product page for stock and initiate purchase when available.
+        """
+        print(f"Starting monitoring for: {self.product_url}")
+        print(f"Maximum price set to ${self.max_price:.2f}")
+        
+        if self.has_been_purchased():
+            print("This product has already been purchased. Monitoring canceled.")
+            return
+            
+        try:
+            while not self.purchase_successful:
+                if self.check_stock_and_price():
+                    print("\nPRODUCT IN STOCK AND UNDER PRICE LIMIT!")
+                    
+                    # Simple checkout process
+                    self.driver.get(self.product_url)
+                    add_to_cart = self.driver.find_element(By.ID, "add-to-cart-button")
+                    add_to_cart.click()
+                    
+                    time.sleep(1)
+                    self.driver.get("https://www.amazon.com/gp/cart/view.html")
+                    
+                    proceed_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.NAME, "proceedToRetailCheckout"))
+                    )
+                    proceed_button.click()
+                    
+                    place_order_button = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                    )
+                    place_order_button.click()
+                    
+                    self.mark_as_purchased()
+                    print("Purchase successful! Monitoring stopped.")
+                    return
+                    
+                time.sleep(5)  # Check every 5 seconds
+                
+        except KeyboardInterrupt:
+            print("\nMonitoring stopped by user.")
+        except Exception as e:
+            print(f"Error occurred: {str(e)}. Restarting monitoring...")
+            time.sleep(5)
+            self.monitor()
 
 def create_env_file() -> bool:
     """
