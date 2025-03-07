@@ -680,50 +680,62 @@ class AmazonStockChecker:
             
     def monitor(self):
         """
-        Monitor the product page for stock and initiate purchase when available.
+        High-performance monitoring with status tracking.
         """
-        print(f"Starting monitoring for: {self.product_url}")
+        print(f"Starting lightning-fast monitoring for: {self.product_url}")
         print(f"Maximum price set to ${self.max_price:.2f}")
         
         if self.has_been_purchased():
             print("This product has already been purchased. Monitoring canceled.")
+            self.cleanup()
             return
-            
+        
+        start_time = time.time()
+        last_browser_refresh = time.time()
+        browser_refresh_interval = 900  # Refresh browser every 15 minutes
+        
         try:
-            while not self.purchase_successful:
+            while not self.purchase_successful and not self.exit_requested:
+                self.check_count += 1
+                
+                # Show status every 5000 checks
+                current_time = time.time()
+                if self.check_count % 5000 == 0:
+                    elapsed = current_time - start_time
+                    checks_per_second = self.check_count / elapsed
+                    print(f"Status: {self.check_count} checks performed. Time elapsed: {elapsed:.2f} seconds. Rate: {checks_per_second:.2f} checks/second")
+                    self.last_status_time = current_time
+                
+                # Periodic browser refresh to prevent session timeouts
+                if current_time - last_browser_refresh > browser_refresh_interval:
+                    self.refresh_browser_periodically()
+                    last_browser_refresh = current_time
+                
+                # Check stock and price
                 if self.check_stock_and_price():
-                    print("\nPRODUCT IN STOCK AND UNDER PRICE LIMIT!")
+                    print("\n🚨 PRODUCT IN STOCK AND UNDER PRICE LIMIT! 🚨")
                     
-                    # Simple checkout process
-                    self.driver.get(self.product_url)
-                    add_to_cart = self.driver.find_element(By.ID, "add-to-cart-button")
-                    add_to_cart.click()
-                    
-                    time.sleep(1)
-                    self.driver.get("https://www.amazon.com/gp/cart/view.html")
-                    
-                    proceed_button = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.NAME, "proceedToRetailCheckout"))
-                    )
-                    proceed_button.click()
-                    
-                    place_order_button = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.ID, "placeYourOrder"))
-                    )
-                    place_order_button.click()
-                    
-                    self.mark_as_purchased()
-                    print("Purchase successful! Monitoring stopped.")
-                    return
-                    
-                time.sleep(5)  # Check every 5 seconds
+                    # Use the new ultra-fast checkout method
+                    if self.ultra_fast_purchase():
+                        print("Purchase successful! Monitoring stopped.")
+                        self.cleanup()
+                        return
+                    else:
+                        print("Continuing to monitor for another attempt...")
+                
+                # Short, randomized sleep with emphasis on speed
+                time.sleep(random.uniform(0.005, self.check_interval))
                 
         except KeyboardInterrupt:
             print("\nMonitoring stopped by user.")
         except Exception as e:
             print(f"Error occurred: {str(e)}. Restarting monitoring...")
             time.sleep(5)
-            self.monitor()
+            # Only restart if we haven't requested an exit
+            if not self.exit_requested:
+                self.monitor()
+        finally:
+            self.cleanup()
 
     def extract_price(self, text):
         """
