@@ -1015,7 +1015,7 @@ def create_env_file() -> bool:
     Returns:
         True if amazon.env file exists or was created successfully, False otherwise
     """
-    env_path = Path('amazon.env')
+    env_path = Path('amazon.env').absolute()
     
     if not env_path.exists():
         email = input("Enter your Amazon email: ")
@@ -1151,7 +1151,7 @@ if __name__ == "__main__":
     try:
         # Print the absolute path of the amazon.env file
         env_path = Path('amazon.env').absolute()
-        print(f"\nConfig:\n-\tEnvironment file location: {env_path}\n{'-'*logo_length}")
+        print(f"\nConfig:\n>\tEnvironment file location: {env_path}\n{'-'*logo_length}")
         
         if not create_env_file():
             print("Error: Could not create amazon.env file")
