@@ -49,7 +49,7 @@ class AmazonUltraFastBot:
     the specified maximum price.
     """
     
-    def __init__(self, product_url: str, email: str, password: str, max_price: float = 2800.0, check_interval: float = 0.05) -> None:
+    def __init__(self, product_url: str, email: str, password: str, max_price: float, check_interval: float = 0.05) -> None:
         """
         Initialize the Amazon Ultra Fast Bot.
         
@@ -57,7 +57,7 @@ class AmazonUltraFastBot:
             product_url: URL of the Amazon product to monitor
             email: Amazon account email
             password: Amazon account password
-            max_price: Maximum price to trigger purchase (default: 2800.0)
+            max_price: Maximum price to trigger purchase
             check_interval: Time between stock checks in seconds (default: 0.05)
         """
         self.product_url = product_url
