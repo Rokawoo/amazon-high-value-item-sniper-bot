@@ -19,8 +19,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+import aiohttp
 
-# Global variables for cleanup tracking
 exit_requested = False
 exit_in_progress = False
 
@@ -28,12 +30,7 @@ class SuppressOutput:
     """Context manager to temporarily suppress stdout and stderr output."""
     
     def __enter__(self) -> 'SuppressOutput':
-        """
-        Set up output suppression by redirecting stdout and stderr.
-        
-        Returns:
-            SuppressOutput: The context manager instance
-        """
+        """Set up output suppression by redirecting stdout and stderr."""
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         sys.stdout = open(os.devnull, 'w')
@@ -41,14 +38,7 @@ class SuppressOutput:
         return self
 
     def __exit__(self, exc_type: Optional[type], exc_val: Optional[Exception], exc_tb: Optional[Any]) -> None:
-        """
-        Restore original stdout and stderr when exiting the context.
-        
-        Args:
-            exc_type: Exception type if an exception occurred
-            exc_val: Exception value if an exception occurred
-            exc_tb: Exception traceback if an exception occurred
-        """
+        """Restore original stdout and stderr when exiting the context."""
         sys.stdout.close()
         sys.stderr.close()
         sys.stdout = self._original_stdout
@@ -56,28 +46,14 @@ class SuppressOutput:
 
     @staticmethod
     def update_terminal_line(message: str) -> None:
-        """
-        Update the current terminal line with a new message.
-        
-        Args:
-            message: The message to display on the current line
-        """
+        """Update the current terminal line with a new message."""
         sys.stdout.write('\r' + ' ' * 100)
         sys.stdout.write('\r' + message)
         sys.stdout.flush()
 
     @staticmethod
     def update_multiple_lines(messages: List[str], prev_line_count: int = 0) -> int:
-        """
-        Update multiple lines in the terminal with new messages.
-        
-        Args:
-            messages: List of message strings to display
-            prev_line_count: Number of previously printed lines to clear
-            
-        Returns:
-            int: Number of lines printed
-        """
+        """Update multiple lines in the terminal with new messages."""
         if prev_line_count > 0:
             sys.stdout.write('\r')
             sys.stdout.write(f'\033[{prev_line_count - 1}A')
@@ -98,73 +74,76 @@ class AmazonUltraFastBot:
     """
     
     def __init__(self, product_url: str, email: str, password: str, max_price: float, check_interval: float = 0.05) -> None:
-        """
-        Initialize the Amazon Ultra Fast Bot.
-        
-        Args:
-            product_url: URL of the Amazon product to monitor
-            email: Amazon account email
-            password: Amazon account password
-            max_price: Maximum price to trigger purchase
-            check_interval: Time between stock checks in seconds (default: 0.05)
-        """
+        """Initialize the Amazon Ultra Fast Bot."""
         self.product_url = product_url
         self.email = email
         self.password = password
         self.max_price = float(max_price)
         self.check_interval = check_interval
         self.purchase_record_file = 'purchase_record.json'
-        self.load_purchase_record()
-        self.purchase_attempted = False
-        self.purchase_successful = False
-        self.driver = None
-        self.session = requests.Session()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Connection': 'keep-alive',
-            'Cache-Control': 'max-age=0'
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
         }
+        self.load_purchase_record()
+        self.purchase_attempted = False
+        self.purchase_successful = False
+        self.driver = None
+        self.api_session = self._create_optimized_session()
+        self.browser_session = self._create_optimized_session()
         self.current_price = None
         self.price_source = None
-        self.last_status_update = 0
         self.status_messages = []
         self.prev_line_count = 0
         self.in_stock_prices = []
+        self.price_patterns = self._compile_price_patterns()
 
         self.last_status_time = time.time()
         self.check_count = 0
         self.exit_requested = False
         self.browser_pid = None
+        self.api_pool = ThreadPoolExecutor(max_workers=4)
+        self.purchase_pool = ThreadPoolExecutor(max_workers=6)
         
-        # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
-        
-        # Register at-exit handler as a fallback
         atexit.register(self.cleanup)
-        
-        # Initialize browser
         self.initialize_browser()
     
+    def _create_optimized_session(self) -> requests.Session:
+        """Create an optimized requests session with connection pooling."""
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=3
+        )
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        session.headers.update(self.headers)
+        return session
+    
+    def _compile_price_patterns(self) -> Tuple[re.Pattern, ...]:
+        """Compile regular expression patterns for price extraction."""
+        return (
+            re.compile(r'\$([0-9,]+\.[0-9]{2})'),
+            re.compile(r'\$([0-9,]+)'),
+            re.compile(r'([0-9,]+\.[0-9]{2})\s*\$'),
+            re.compile(r'([0-9,]+\.[0-9]{2})')
+        )
+    
     def update_price_status(self, price: float, source: str = "Browser") -> None:
-        """
-        Update the current price information without refreshing the display.
-        
-        Args:
-            price: The detected price
-            source: Source of the price detection (Browser/API)
-        """
+        """Update the current price information without refreshing the display."""
         self.current_price = price
         self.price_source = source
-        
         self.update_terminal_display()
     
     def update_terminal_display(self) -> None:
-        """
-        Update the terminal with unified display of price, status, and other information.
-        """
+        """Update the terminal with unified display of price, status, and other information."""
         display_messages = []
 
         if self.current_price is not None:
@@ -187,13 +166,7 @@ class AmazonUltraFastBot:
         self.prev_line_count = SuppressOutput.update_multiple_lines(display_messages, self.prev_line_count)
     
     def signal_handler(self, sig: int, frame: Any) -> None:
-        """
-        Handle interrupt signals with double-press detection for forced exit.
-        
-        Args:
-            sig: Signal number
-            frame: Current stack frame
-        """
+        """Handle interrupt signals with double-press detection for forced exit."""
         global exit_in_progress, exit_requested
         
         if exit_in_progress:
@@ -224,9 +197,7 @@ class AmazonUltraFastBot:
         sys.exit(0)
 
     def _force_close_browser(self) -> None:
-        """
-        Force close the browser window using both PID and process name approach.
-        """
+        """Force close the browser window using both PID and process name approach."""
         if hasattr(self, 'driver') and self.driver:
             try:
                 self.driver.quit()
@@ -256,26 +227,24 @@ class AmazonUltraFastBot:
         self.browser_pid = None
 
     def _verify_browser_closed(self) -> None:
-        """
-        Verify that the browser has actually been closed and clean up if needed.
-        """
+        """Verify that the browser has actually been closed and clean up if needed."""
         if hasattr(self, 'browser_pid') and self.browser_pid:
             try:
                 if os.name == 'nt':
                     import subprocess
                     process_check = subprocess.run(f'tasklist /FI "PID eq {self.browser_pid}" /NH', 
-                                                shell=True, 
-                                                capture_output=True, 
-                                                text=True)
+                                               shell=True, 
+                                               capture_output=True, 
+                                               text=True)
                     if str(self.browser_pid) in process_check.stdout:
                         print("Browser still running, forcing termination...")
                         os.system(f'taskkill /F /PID {self.browser_pid} 2>nul')
                 else:
                     import subprocess
                     process_check = subprocess.run(f'ps -p {self.browser_pid}', 
-                                                shell=True, 
-                                                capture_output=True, 
-                                                text=True)
+                                               shell=True, 
+                                               capture_output=True, 
+                                               text=True)
                     if str(self.browser_pid) in process_check.stdout:
                         print("Browser still running, forcing termination...")
                         os.system(f'kill -9 {self.browser_pid}')
@@ -286,9 +255,7 @@ class AmazonUltraFastBot:
         self.browser_pid = None
 
     def cleanup(self) -> None:
-        """
-        Safely clean up resources, checking if browser is already closed.
-        """
+        """Safely clean up resources, checking if browser is already closed."""
         self.exit_requested = True
         
         if not hasattr(self, 'driver') or self.driver is None:
@@ -311,13 +278,17 @@ class AmazonUltraFastBot:
                 except:
                     pass
         
+        try:
+            self.api_pool.shutdown(wait=False)
+            self.purchase_pool.shutdown(wait=False)
+        except:
+            pass
+            
         self.driver = None
         self.browser_pid = None
         
     def load_purchase_record(self) -> None:
-        """
-        Load purchase history from file or create a new one if it doesn't exist.
-        """
+        """Load purchase history from file or create a new one if it doesn't exist."""
         try:
             if os.path.exists(self.purchase_record_file):
                 with open(self.purchase_record_file, 'r') as f:
@@ -330,18 +301,11 @@ class AmazonUltraFastBot:
             self.purchase_record = {}
             
     def has_been_purchased(self) -> bool:
-        """
-        Check if the current product has already been purchased.
-        
-        Returns:
-            True if product has been purchased, False otherwise
-        """
+        """Check if the current product has already been purchased."""
         return self.product_url in self.purchase_record
         
     def mark_as_purchased(self) -> None:
-        """
-        Mark the current product as purchased in the purchase record.
-        """
+        """Mark the current product as purchased in the purchase record."""
         try:
             self.purchase_record[self.product_url] = {
                 'purchased_at': time.time(),
@@ -354,13 +318,10 @@ class AmazonUltraFastBot:
             pass
     
     def initialize_browser(self) -> None:
-        """
-        Initialize Chrome browser with ultra-optimized settings for fastest automated checkout.
-        """
+        """Initialize Chrome browser with ultra-optimized settings for fastest automated checkout."""
         with SuppressOutput():
             chrome_options = Options()
             
-            # Enhanced Chrome arguments for maximum speed
             chrome_args = (
                 "--disable-gpu",
                 "--no-sandbox",
@@ -385,7 +346,6 @@ class AmazonUltraFastBot:
                 "--disable-features=TranslateUI",
                 "--disable-translate",
                 "--dns-prefetch-disable",
-                # New optimizations
                 "--disable-web-security",
                 "--disable-site-isolation-trials",
                 "--ignore-certificate-errors",
@@ -412,7 +372,6 @@ class AmazonUltraFastBot:
             for arg in chrome_args:
                 chrome_options.add_argument(arg)
             
-            # Enhanced Chrome preferences
             chrome_prefs = {
                 "profile.default_content_setting_values.notifications": 2,
                 "profile.managed_default_content_settings.images": 1,
@@ -436,7 +395,6 @@ class AmazonUltraFastBot:
             chrome_options.add_experimental_option('excludeSwitches', ('enable-logging', 'enable-automation'))
             chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            # Try using undetected_chromedriver if available
             try:
                 import undetected_chromedriver as uc
                 self.driver = uc.Chrome(options=chrome_options)
@@ -444,75 +402,99 @@ class AmazonUltraFastBot:
                 service = Service(ChromeDriverManager().install())
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
 
-            # Store the browser process ID for clean shutdown
             try:
                 if hasattr(self.driver.service, 'process') and self.driver.service.process:
                     self.browser_pid = self.driver.service.process.pid
             except:
                 pass
             
-            # Set aggressive timeouts
             self.driver.set_page_load_timeout(10)
-            self.driver.set_script_timeout(5)
+            self.driver.set_script_timeout(3)
             self.driver.implicitly_wait(0.1)
             
             print("Browser initialized. Logging in to Amazon...")
             self.login()
-            
-            # Preload checkout paths and prepare optimized JavaScript
             self.preload_checkout_paths()
     
     def preload_checkout_paths(self) -> None:
-        """
-        Pre-load checkout-related pages to improve purchase speed and prepare JS code.
-        """
+        """Pre-load checkout-related pages to improve purchase speed and prepare JS code."""
         print("Pre-loading checkout paths to improve speed...")
         try:
             self.driver.get("https://www.amazon.com/gp/cart/view.html")
             self.driver.get("https://www.amazon.com/gp/checkout/select")
             self.driver.get(self.product_url)
             
-            # Optimized one-click JavaScript for ultra-fast checkout
+            # Updated one-click JavaScript to handle popup modals
             self.one_click_js = """
             // Try to trigger Buy Now first (highest priority)
             const buyNowBtn = document.getElementById('buy-now-button');
             if (buyNowBtn) {
                 buyNowBtn.click();
                 
-                // Immediately attempt to place order without waiting for page transition
+                // Set up a handler to click Place Order when popup appears
                 setTimeout(() => {
-                    const placeOrder = document.getElementById('placeYourOrder');
-                    if (placeOrder) placeOrder.click();
-                }, 100);
+                    // Check for modal/popup
+                    const isModalActive = document.querySelector('body').classList.contains('a-modal-active');
+                    if (isModalActive) {
+                        // Try to find the Place Order button in the modal
+                        const modal = document.querySelector('.a-modal-active .a-popover-wrapper, .turbo-checkout-modal, .buy-now-modal');
+                        if (modal) {
+                            // Try various selectors for the Place Order button
+                            const buttonSelectors = [
+                                '#turbo-checkout-pyo-button',
+                                '.a-button-primary',
+                                'button[type="submit"]',
+                                'input[type="submit"]',
+                                'span:contains("Place your order")'
+                            ];
+                            
+                            for (const selector of buttonSelectors) {
+                                const btn = modal.querySelector(selector);
+                                if (btn) {
+                                    btn.click();
+                                    return;
+                                }
+                            }
+                            
+                            // If none of the specific selectors worked, try the primary button
+                            const primaryButton = modal.querySelector('.a-button-primary');
+                            if (primaryButton) {
+                                primaryButton.click();
+                            }
+                        }
+                    } else {
+                        // If no modal, try the regular place order button
+                        const placeOrder = document.getElementById('placeYourOrder') || 
+                                        document.getElementById('turbo-checkout-pyo-button') || 
+                                        document.getElementById('submitOrderButtonId');
+                        if (placeOrder) placeOrder.click();
+                    }
+                }, 1000);
                 
                 return true;
             }
             
-            // Try Add to Cart as fallback
+            // Add to Cart fallback remains the same
             const addToCartBtn = document.getElementById('add-to-cart-button');
             if (addToCartBtn) {
                 addToCartBtn.click();
                 
-                // Try to click through the mini cart or proceed to checkout directly
                 setTimeout(() => {
-                    // Try mini cart "Proceed to checkout" that sometimes appears
                     const miniCartProceed = document.querySelector('#sw-ptc-form .a-button-input');
                     if (miniCartProceed) {
                         miniCartProceed.click();
                         return;
                     }
                     
-                    // Try immediate place order
                     const placeOrder = document.getElementById('placeYourOrder');
                     if (placeOrder) {
                         placeOrder.click();
                         return;
                     }
                     
-                    // Try proceed to checkout button
                     const proceedCheckout = document.getElementById('sc-buy-box-ptc-button');
                     if (proceedCheckout) proceedCheckout.click();
-                }, 100);
+                }, 500);
                 
                 return true;
             }
@@ -526,10 +508,7 @@ class AmazonUltraFastBot:
             self.driver.get(self.product_url)
     
     def login(self) -> None:
-        """
-        Log in to Amazon using the provided credentials.
-        Handles 2FA if needed.
-        """
+        """Log in to Amazon using the provided credentials, handling 2FA if needed."""
         try:
             self.driver.get("https://www.amazon.com/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.com%2F%3Fref_%3Dnav_signin&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=usflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0")
             
@@ -600,23 +579,7 @@ class AmazonUltraFastBot:
             input("Press Enter after completing login manually...")
     
     def extract_price(self, text: str) -> Optional[float]:
-        """
-        Extract price from text containing price information.
-        
-        Args:
-            text: Text containing price information
-            
-        Returns:
-            Extracted price as float or None if no price found
-        """
-        if not hasattr(self, 'price_patterns'):
-            self.price_patterns = (
-                re.compile(r'\$([0-9,]+\.[0-9]{2})'),
-                re.compile(r'\$([0-9,]+)'),
-                re.compile(r'([0-9,]+\.[0-9]{2})\s*\$'),
-                re.compile(r'([0-9,]+\.[0-9]{2})')
-            )
-        
+        """Extract price from text containing price information."""
         for pattern in self.price_patterns:
             matches = pattern.findall(text)
             if matches:
@@ -624,12 +587,7 @@ class AmazonUltraFastBot:
         return None
     
     def get_product_price(self) -> Optional[float]:
-        """
-        Get the current price of the product using various selectors.
-        
-        Returns:
-            Current price as float or None if price couldn't be determined
-        """
+        """Get the current price of the product using various selectors."""
         try:
             try:
                 price_js = self.driver.execute_script('''
@@ -690,12 +648,7 @@ class AmazonUltraFastBot:
             return None
     
     def check_stock_and_price(self) -> bool:
-        """
-        Check if the product is in stock and within the price limit using browser.
-        
-        Returns:
-            True if product is available and within price limit, False otherwise
-        """
+        """Check if the product is in stock and within the price limit using browser."""
         try:
             try:
                 is_available = self.driver.execute_script('''
@@ -726,7 +679,7 @@ class AmazonUltraFastBot:
                 pass
                 
             try:
-                with self.session.get(
+                with self.browser_session.get(
                     self.product_url, 
                     headers=self.headers, 
                     timeout=0.5,
@@ -750,31 +703,8 @@ class AmazonUltraFastBot:
             return False
 
     def check_stock_via_api(self) -> bool:
-        """
-        Ultra-fast stock check using direct HTTP requests in parallel with browser checks.
-        
-        Returns:
-            True if stock detected and within price limit, False otherwise
-        """
+        """Ultra-fast stock check using direct HTTP requests in parallel with browser checks."""
         try:
-            # Use a dedicated session with connection pooling
-            if not hasattr(self, 'api_session'):
-                self.api_session = requests.Session()
-                self.api_session.headers.update({
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Connection': 'keep-alive',
-                    'Pragma': 'no-cache',
-                    'Cache-Control': 'no-cache'
-                })
-                # Preemptively establish connections
-                try:
-                    self.api_session.get('https://www.amazon.com', timeout=0.5)
-                except:
-                    pass
-            
-            # Use streaming requests to minimize download time
             response = self.api_session.get(
                 self.product_url, 
                 headers={'Cache-Control': 'no-cache, max-age=0'},
@@ -782,23 +712,18 @@ class AmazonUltraFastBot:
                 stream=True
             )
             
-            # Read only the first chunk (typically contains add-to-cart button)
             content = next(response.iter_content(chunk_size=10000)).decode('utf-8', errors='ignore')
             
             if "add-to-cart-button" in content and "Currently unavailable" not in content:
-                # Also check for in-stock indicators
                 stock_indicators = ("In Stock", "Only", "left in stock", "Add to Cart")
                 if any(indicator in content for indicator in stock_indicators):
-                    # Parse price from response content
                     price = None
                     
-                    # Try to extract price from content
                     price_match = re.search(r'\"price\":\s*\"(\$[0-9,.]+)\"', content)
                     if price_match:
                         price_str = price_match.group(1)
                         price = float(price_str.replace('$', '').replace(',', ''))
                     else:
-                        # Try other common price patterns
                         for pattern in (
                             r'<span class="a-price"[^>]*><span[^>]*>([$])?([0-9,.]+)</span>',
                             r'id="priceblock_ourprice"[^>]*>([$])?([0-9,.]+)',
@@ -818,7 +743,6 @@ class AmazonUltraFastBot:
                         self.update_price_status(price, "API")
                         return price <= self.max_price
                     else:
-                        # If we can't determine price but item is in stock, trigger browser check
                         return True
             
             return False
@@ -826,58 +750,45 @@ class AmazonUltraFastBot:
             return False
     
     def ultra_fast_purchase(self) -> bool:
-        """
-        Execute ultra-fast purchase using multiple parallel strategies with high priority.
-        
-        Returns:
-            True if purchase was successful, False otherwise
-        """
+        """Execute ultra-fast purchase using multiple parallel strategies with high priority."""
         if self.has_been_purchased() or self.purchase_attempted:
             return False
             
         self.purchase_attempted = True
         print("\n🚨 INITIATING LIGHTNING FAST CHECKOUT! 🚨")
         
-        purchase_threads = []
-        
         try:
-            # Set high process priority if possible (platform specific)
             try:
                 import psutil
                 process = psutil.Process(os.getpid())
-                if os.name == 'nt':  # Windows
+                if os.name == 'nt':
                     process.nice(psutil.HIGH_PRIORITY_CLASS)
-                else:  # Unix-based
-                    process.nice(-10)  # Lower value = higher priority
+                else:
+                    process.nice(-10)
             except:
                 pass
             
-            # Create threads with specific targets
-            strategies = (
-                (self.js_purchase_strategy, "JS Direct"),
-                (self.buy_now_strategy, "Buy Now"),
-                (self.cart_strategy, "Cart"),
-                (self.turbo_cart_strategy, "Turbo Cart")  # New strategy
-            )
+            futures = []
+            strategies = [
+                self.js_purchase_strategy,
+                self.buy_now_strategy,
+                self.cart_strategy,
+                self.turbo_cart_strategy,
+                self.js_purchase_strategy,  # Add duplicates of fastest strategy
+                self.js_purchase_strategy
+            ]
             
-            for strategy_func, name in strategies:
-                thread = threading.Thread(target=strategy_func, daemon=True, name=name)
-                thread.start()
-                purchase_threads.append(thread)
+            for strategy in strategies:
+                futures.append(self.purchase_pool.submit(strategy))
             
-            # Spin up additional threads with the fastest strategy to increase chances
-            fastest_strategy = self.js_purchase_strategy
-            for i in range(2):  # 2 more threads with the fastest method
-                thread = threading.Thread(target=fastest_strategy, daemon=True, name=f"JS Direct {i+2}")
-                thread.start()
-                purchase_threads.append(thread)
-            
-            # Wait for success or timeout
             max_wait = 15
             start = time.time()
             while time.time() - start < max_wait:
                 if self.purchase_successful:
                     print("🔥 ORDER SUCCESSFULLY PLACED! 🔥")
+                    for future in futures:
+                        future.cancel()
+                    
                     return True
                 time.sleep(0.1)
             
@@ -896,16 +807,31 @@ class AmazonUltraFastBot:
             return False
     
     def js_purchase_strategy(self) -> None:
-        """
-        Purchase strategy using direct JavaScript execution for fastest checkout.
-        """
+        """Purchase strategy using direct JavaScript execution for fastest checkout."""
         try:
             self.driver.get(self.product_url)
             
+            # Wait for page to load enough that buttons would be present
+            WebDriverWait(self.driver, 5).until(
+                lambda d: d.execute_script('return document.readyState') in ['interactive', 'complete']
+            )
+            
+            # Wait for buy now or add to cart buttons specifically
+            try:
+                WebDriverWait(self.driver, 3).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "#buy-now-button, #add-to-cart-button"))
+                )
+            except:
+                print("No purchase buttons found in js_purchase_strategy")
+                return
+                
+            # Now execute the one-click JS
             added = self.driver.execute_script(self.one_click_js)
             if not added:
+                print("JS execution didn't find actionable buttons")
                 return
             
+            # Wait for place order button on checkout page
             try:
                 place_order_button = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
@@ -914,44 +840,142 @@ class AmazonUltraFastBot:
                 self.mark_as_purchased()
             except:
                 try:
+                    # If not found, try going to checkout page directly
                     self.driver.get("https://www.amazon.com/gp/checkout/select")
-                    place_order_button = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.ID, "placeYourOrder"))
-                    )
-                    self.driver.execute_script("arguments[0].click();", place_order_button)
-                    self.mark_as_purchased()
+                    
+                    # Wait for place order button with multiple possible IDs
+                    for button_id in ["placeYourOrder", "turbo-checkout-pyo-button", "submitOrderButtonId"]:
+                        try:
+                            place_order_button = WebDriverWait(self.driver, 3).until(
+                                EC.element_to_be_clickable((By.ID, button_id))
+                            )
+                            self.driver.execute_script("arguments[0].click();", place_order_button)
+                            print(f"Order placed with ID: {button_id}")
+                            self.mark_as_purchased()
+                            break
+                        except:
+                            continue
                 except:
-                    pass
-        except:
-            pass
-    
+                    print("Failed to complete checkout in js_purchase_strategy")
+        except Exception as e:
+            print(f"Error in js_purchase_strategy: {e}")
+
     def buy_now_strategy(self) -> None:
-        """
-        Purchase strategy using Buy Now button for one-step checkout.
-        """
+        """Purchase strategy using Buy Now button for one-step checkout."""
         try:
             self.driver.get(self.product_url)
             
-            buy_now = WebDriverWait(self.driver, 2).until(
-                EC.element_to_be_clickable((By.ID, "buy-now-button"))
+            # Wait for page to load
+            WebDriverWait(self.driver, 5).until(
+                lambda d: d.execute_script('return document.readyState') != 'loading'
             )
-            self.driver.execute_script("arguments[0].click();", buy_now)
             
+            # Click Buy Now button
             try:
-                place_order_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.ID, "placeYourOrder"))
+                buy_now = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "buy-now-button"))
                 )
-                self.driver.execute_script("arguments[0].click();", place_order_button)
-                self.mark_as_purchased()
+                print("Buy Now button found, clicking...")
+                self.driver.execute_script("arguments[0].click();", buy_now)
             except:
-                pass
-        except:
-            pass
+                print("Buy Now button not found or not clickable")
+                return False
+            
+            # Give the popup a moment to appear
+            time.sleep(0.5)
+            
+            # Now target the exact button structure you shared
+            place_order_clicked = self.driver.execute_script("""
+            // Try several specific selectors for the place order button
+            
+            // First try the exact ID from the HTML you shared
+            const turboButton = document.getElementById('turbo-checkout-pyo-button');
+            if (turboButton) {
+                console.log("Found turbo-checkout-pyo-button");
+                turboButton.click();
+                return true;
+            }
+            
+            // Try the parent span if the button itself can't be clicked
+            const turboButtonParent = document.getElementById('turbo-checkout-place-order-button');
+            if (turboButtonParent) {
+                console.log("Found turbo-checkout-place-order-button");
+                turboButtonParent.click();
+                return true;
+            }
+            
+            // Try finding the button by its text content
+            const placeOrderButtons = Array.from(document.querySelectorAll('input[type="submit"]'))
+                .filter(el => el.value && el.value.includes('Place your order'));
+                
+            if (placeOrderButtons.length > 0) {
+                console.log("Found button with 'Place your order' text");
+                placeOrderButtons[0].click();
+                return true;
+            }
+            
+            // Try finding by the announce element
+            const announceElement = document.getElementById('turbo-checkout-place-order-button-announce');
+            if (announceElement) {
+                console.log("Found announce element, clicking parent button");
+                // Navigate up to find the clickable parent
+                let clickTarget = announceElement.parentElement;
+                while (clickTarget && !clickTarget.classList.contains('a-button')) {
+                    clickTarget = clickTarget.parentElement;
+                }
+                
+                if (clickTarget) {
+                    clickTarget.click();
+                    return true;
+                }
+            }
+            
+            // Try a direct CSS selector approach
+            const cssButton = document.querySelector('.a-button-primary input[type="submit"]');
+            if (cssButton) {
+                console.log("Found button via CSS selector");
+                cssButton.click();
+                return true;
+            }
+            
+            // Last resort: Trigger a form submission if this is in a form
+            const form = document.querySelector('form');
+            if (form) {
+                console.log("Trying form submission");
+                form.submit();
+                return true;
+            }
+            
+            console.log("Could not find the place order button");
+            return false;
+            """)
+            
+            print("Place order clicked:", place_order_clicked)
+            
+            if place_order_clicked:
+                print("Clicked Place Order button based on the exact HTML structure")
+                # Give a moment for the order to process
+                time.sleep(2)
+                
+                # Check if we're redirected to order confirmation page
+                current_url = self.driver.current_url
+                if "thank-you" in current_url or "order-details" in current_url or "order-confirmation" in current_url:
+                    print("Order confirmed! Redirected to thank you page")
+                    self.mark_as_purchased()
+                    return True
+                else:
+                    print("Order may have been placed, but no confirmation page detected")
+                    print("Current URL:", current_url)
+                    # Still mark as potentially purchased to avoid repeated attempts
+                    self.mark_as_purchased()
+                    return True
+                    
+        except Exception as e:
+            print(f"Error in buy_now_strategy: {e}")
+            return False
     
     def cart_strategy(self) -> None:
-        """
-        Purchase strategy using Add to Cart + Express Checkout path.
-        """
+        """Purchase strategy using Add to Cart + Express Checkout path."""
         try:
             self.driver.get(self.product_url)
             
@@ -987,40 +1011,31 @@ class AmazonUltraFastBot:
             pass
     
     def turbo_cart_strategy(self) -> None:
-        """
-        New ultra-optimized purchase strategy that combines direct API call and browser actions.
-        """
+        """New ultra-optimized purchase strategy that combines direct API call and browser actions."""
         try:
-            # Direct API call to add to cart (faster than browser)
             product_id_match = re.search(r'/dp/([A-Z0-9]{10})', self.product_url)
             if product_id_match:
                 product_id = product_id_match.group(1)
                 try:
-                    # Direct add to cart API call
                     add_to_cart_url = f"https://www.amazon.com/gp/aws/cart/add.html?ASIN.1={product_id}&Quantity.1=1"
-                    self.session.get(add_to_cart_url, timeout=0.5)
+                    self.api_session.get(add_to_cart_url, timeout=0.5)
                 except:
                     pass
                 
-            # Also try browser method
             self.driver.get(self.product_url)
             
-            # Execute optimized JavaScript for fastest checkout
             self.driver.execute_script("""
             function turboCheckout() {
-                // Try all possible ways to check out at once
                 const buyNowBtn = document.getElementById('buy-now-button');
                 if (buyNowBtn) buyNowBtn.click();
                 
                 const addToCartBtn = document.getElementById('add-to-cart-button');
                 if (addToCartBtn) addToCartBtn.click();
                 
-                // Aggressive approach - try going directly to place order
                 setTimeout(() => {
                     window.location.href = 'https://www.amazon.com/gp/checkout/select';
                 }, 300);
                 
-                // Try clicking any place order button
                 setTimeout(() => {
                     const placeOrderBtns = document.querySelectorAll('[id*="placeYourOrder"], [id*="place-order"]');
                     placeOrderBtns.forEach(btn => btn.click());
@@ -1030,12 +1045,10 @@ class AmazonUltraFastBot:
             turboCheckout();
             """)
             
-            # Directly navigate to checkout page after brief delay
             time.sleep(0.3)
             try:
                 self.driver.get("https://www.amazon.com/gp/checkout/select")
                 
-                # Try to find and click place order button
                 place_order_button = WebDriverWait(self.driver, 3).until(
                     EC.element_to_be_clickable((By.ID, "placeYourOrder"))
                 )
@@ -1047,12 +1060,7 @@ class AmazonUltraFastBot:
             pass
     
     def refresh_browser_periodically(self) -> bool:
-        """
-        Periodically refresh the browser to prevent session timeouts.
-        
-        Returns:
-            True if refresh was successful, False otherwise
-        """
+        """Periodically refresh the browser to prevent session timeouts."""
         try:
             current_url = self.driver.current_url
             if "amazon.com" in current_url and "/checkout/" not in current_url and not self.purchase_attempted:
@@ -1065,12 +1073,26 @@ class AmazonUltraFastBot:
             except:
                 return False
         return False
+    
+    def async_check_stock(self) -> Tuple[bool, Optional[float]]:
+        """Perform multiple stock checks in parallel using thread pool."""
+        futures = [
+            self.api_pool.submit(self.check_stock_via_api),
+            self.api_pool.submit(self.check_stock_and_price)
+        ]
+        
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result:
+                    return True, self.current_price
+            except:
+                pass
+                
+        return False, None
                 
     def monitor(self) -> None:
-        """
-        Main monitoring loop that continuously checks product availability through
-        multiple methods for optimal speed and reliability.
-        """
+        """Main monitoring loop with optimized multi-threaded checks for maximum performance."""
         global exit_requested
         print(f"Starting lightning-fast monitoring for: {self.product_url}")
         print(f"Maximum price set to ${self.max_price:.2f}")
@@ -1083,11 +1105,14 @@ class AmazonUltraFastBot:
         
         self.monitor_start_time = time.time()
         last_browser_refresh = time.time()
-        browser_refresh_interval = 900  # Refresh browser every 15 minutes
+        browser_refresh_interval = 900
         
         api_check_counter = 0
         browser_check_counter = 0
         self.check_count = 0
+        
+        # Updated cart and checkout URLs
+        cart_url = "https://www.amazon.com/gp/cart/view.html?ref_=nav_cart"
         
         try:
             while not self.purchase_successful and not exit_requested:
@@ -1096,72 +1121,135 @@ class AmazonUltraFastBot:
                 
                 force_status_update = self.check_count % 5000 == 0
                 
-                if api_check_counter >= 10:
+                if api_check_counter >= 5:
                     api_check_counter = 0
                     browser_check_counter += 1
                     
-                    if browser_check_counter >= 50:
+                    if browser_check_counter >= 20:
                         browser_check_counter = 0
                         
                         current_time = time.time()
                         if current_time - last_browser_refresh > browser_refresh_interval:
                             self.refresh_browser_periodically()
                             last_browser_refresh = current_time
-                        
-                        if self.check_stock_and_price():
-                            price = self.get_product_price()
-                            if price is not None:
-                                if price not in self.in_stock_prices:
-                                    self.in_stock_prices.append(price)
-                                
-                                self.update_price_status(price, "Browser")
-                                
-                                print(f"\n🚨 PRODUCT IN STOCK! Browser check price: ${price:.2f}")
-                                
-                                if self.ultra_fast_purchase():
-                                    print("\nPurchase successful! Monitoring stopped.")
-                                    self.cleanup()
-                                    return
-                                else:
-                                    print("\nContinuing to monitor for another attempt...")
-                                    self.update_terminal_display()
-                
-                if self.check_stock_via_api():
-                    price = None
-                    try:
-                        response = self.api_session.get(
-                            self.product_url, 
-                            headers={'Cache-Control': 'no-cache, max-age=0'},
-                            timeout=0.5
-                        )
-                        content = response.text
-                        price_match = re.search(r'\"price\":\s*\"(\$[0-9,.]+)\"', content)
-                        if price_match:
-                            price_str = price_match.group(1)
-                            price = float(price_str.replace('$', '').replace(',', ''))
-                    except:
-                        pass
                     
-                    if price is not None:
-                        self.update_price_status(price, "API")
-                        
-                        if price not in self.in_stock_prices:
-                            self.in_stock_prices.append(price)
-                    
-                    print(f"\n🚨 PRODUCT IN STOCK! API check price: ${price:.2f if price else 'unknown'}")
-                    
-                    try:
-                        self.driver.get(self.product_url)
-                    except:
-                        pass
-                        
-                    if self.ultra_fast_purchase():
-                        print("\nPurchase successful! Monitoring stopped.")
-                        self.cleanup()
-                        return
-                    else:
-                        print("\nContinuing to monitor for another attempt...")
-                        self.update_terminal_display()
+                    is_in_stock, price = self.async_check_stock()
+                    if is_in_stock:
+                        if price is not None:
+                            if price not in self.in_stock_prices:
+                                self.in_stock_prices.append(price)
+                            
+                            print(f"\n🚨 PRODUCT IN STOCK! Price: ${price:.2f}")
+                            
+                            try:
+                                # Load product page
+                                self.driver.get(self.product_url)
+                                
+                                # APPROACH 1: Buy Now (fastest path)
+                                try:
+                                    buy_now_button = WebDriverWait(self.driver, 3).until(
+                                        EC.element_to_be_clickable((By.ID, "buy-now-button"))
+                                    )
+                                    
+                                    self.driver.execute_script("arguments[0].click();", buy_now_button)
+                                    print("Buy Now clicked")
+                                    
+                                    # Try to place order - look for multiple possible button IDs
+                                    order_button_selectors = [
+                                        "turbo-checkout-pyo-button",
+                                        "placeYourOrder",
+                                        "submitOrderButtonId"
+                                    ]
+                                    
+                                    for button_id in order_button_selectors:
+                                        try:
+                                            place_order_button = WebDriverWait(self.driver, 2).until(
+                                                EC.element_to_be_clickable((By.ID, button_id))
+                                            )
+                                            self.driver.execute_script("arguments[0].click();", place_order_button)
+                                            print(f"Order placed via Buy Now! (Button ID: {button_id})")
+                                            self.mark_as_purchased()
+                                            self.cleanup()
+                                            return
+                                        except:
+                                            continue
+                                    
+                                    print("Buy Now checkout reached but couldn't place order")
+                                except Exception as e:
+                                    print(f"Buy Now approach failed: {e}")
+                                    
+                                    # APPROACH 2: Add to Cart
+                                    try:
+                                        self.driver.get(self.product_url)
+                                        
+                                        add_to_cart_button = WebDriverWait(self.driver, 3).until(
+                                            EC.element_to_be_clickable((By.ID, "add-to-cart-button"))
+                                        )
+                                        
+                                        self.driver.execute_script("arguments[0].click();", add_to_cart_button)
+                                        print("Added to cart")
+                                        
+                                        # Try to find and click "Proceed to checkout" on any popups
+                                        try:
+                                            WebDriverWait(self.driver, 2).until(
+                                                EC.presence_of_element_located((By.ID, "attach-sidesheet-checkout-button"))
+                                            )
+                                            checkout_buttons = self.driver.find_elements(By.ID, "attach-sidesheet-checkout-button")
+                                            if checkout_buttons:
+                                                self.driver.execute_script("arguments[0].click();", checkout_buttons[0])
+                                                print("Proceeding to checkout from popup")
+                                            else:
+                                                self.driver.get(cart_url)
+                                        except:
+                                            self.driver.get(cart_url)
+                                        
+                                        # Look for proceed to checkout button in cart
+                                        proceed_selectors = [
+                                            "sc-buy-box-ptc-button", 
+                                            "proceed-to-checkout-action",
+                                            "sc-proceed-to-checkout-btn"
+                                        ]
+                                        
+                                        for selector_id in proceed_selectors:
+                                            try:
+                                                proceed_button = WebDriverWait(self.driver, 2).until(
+                                                    EC.element_to_be_clickable((By.ID, selector_id))
+                                                )
+                                                self.driver.execute_script("arguments[0].click();", proceed_button)
+                                                print(f"Proceeding to checkout (Button ID: {selector_id})")
+                                                break
+                                            except:
+                                                continue
+                                        
+                                        # Look for place order button
+                                        for button_id in order_button_selectors:
+                                            try:
+                                                place_order_button = WebDriverWait(self.driver, 3).until(
+                                                    EC.element_to_be_clickable((By.ID, button_id))
+                                                )
+                                                self.driver.execute_script("arguments[0].click();", place_order_button)
+                                                print(f"Order placed via Cart! (Button ID: {button_id})")
+                                                self.mark_as_purchased()
+                                                self.cleanup()
+                                                return
+                                            except:
+                                                continue
+                                    except Exception as e:
+                                        print(f"Add to Cart approach failed: {e}")
+                                
+                            except Exception as e:
+                                print(f"Error during purchase attempt: {e}")
+                            
+                            # Log current URL to help debug
+                            try:
+                                print(f"Current URL after purchase attempt: {self.driver.current_url}")
+                            except:
+                                pass
+                            
+                            # Reset purchase attempted flag to try again
+                            self.purchase_attempted = False
+                            print("\nContinuing to monitor for another purchase attempt...")
+                            self.update_terminal_display()
                 
                 if force_status_update:
                     self.update_terminal_display()
@@ -1180,15 +1268,7 @@ class AmazonUltraFastBot:
 
 
 def create_env_file(env_path: Path) -> bool:
-    """
-    Create amazon.env file with user input if it doesn't exist in the specified location.
-    
-    Args:
-        env_path: Path object representing the full path to the amazon.env file
-        
-    Returns:
-        True if amazon.env file exists or was created successfully, False otherwise
-    """
+    """Create amazon.env file with user input if it doesn't exist."""
     if not env_path.exists():
         email = input("Enter your Amazon email: ")
         password = input("Enter your Amazon password: ")
@@ -1205,116 +1285,113 @@ def create_env_file(env_path: Path) -> bool:
     return env_path.exists()
 
 def print_animated_logo() -> Tuple[int, str]:
-    """
-    Prints the logo with a simple typing animation effect and loading bar.
-    
-    Returns:
-        Tuple containing the length of the last line of the logo and the program name
-    """
+    """Prints the logo with a simple typing animation effect."""
     def clear_screen() -> None:
         if os.name == 'nt':
             os.system('cls')
         else:
             os.system('clear')
 
-    program_name = "Roka's Unary Light-Speed Amazon High Value Product Snipper"
+    program_name = "High-Speed Amazon Sniper Bot"
 
     logo_lines = (
-            "                      ███                                                                  █████    ",
-            "                    ██▓▓████                                                       ██████▓▓▒▒░▒██   ",
-            "                   ██▒▒▓▒░▒███                                                 ███▓▓██▓▒░░░▒▓▓▒██   ",
-            "                  █▓▒▒▒▓▓▒░░▒███                                             ██▓▒▒░░░░░░▒▓▒▒▓▒▒██   ",
-            "                 ██▒▒▒▒▓▒▒░░░░▒███                                        ██▓▒▒▒░░░░░▒▓▓▒▒▒▒▓▒▒██   ",
-            "                 █▓▒▒▓▓▒▒▓▒░░░░░▒██                                     ███▒▒▒░░░░░▒▓▓▒▒▒▒▒▒▓▒▒███  ",
-            "                ██▒▒▒▓▒▒▒▒▓▒░░░░░░▓██                                  ██▒▒▒░░░░░▒▓▒▒▓▓▒▒▒▒▒▓▒▒███  ",
-            "                ██▒▒▓▓▒▒▒▒▒▓▒░░░░░░▒██                    ██████████ ██▓▒▒▒▒▒░░▒▓▓▒▓▓▒▒▒▒▒▒▒▒░▒███  ",
-            "                █▓▒▒▓▒▒▒▒▒▒▒▓▒░░░░░░░▓██                ██▓░░░░░░▒▒▓███▓▒▒▒▒▒░░▒░▒▓▒▒▓▒▒▒▒▒▒▒░▒██   ",
-            "               ██▓▒▒▓▒▒▒▒▒▒▒▒▓▓░░░░░░▒▓██               ██▒▒▒▒▒▓████▓▒▒▒▒▒▒▒░░░░▓▓▓▓▒▒▓▒▒▒▒▒▒░▒██   ",
-            "               ██▒▒▓▒▒▒▒▒▒▒▒▓▓▒▓▒▒▒▒▒▒▒▒██▓███████████████▒▒▒▓█████▒▒▒▒▒▒▒▒░░░▒▓▓▒░░░▓▓▒▒▒▒▒░░▓██   ",
-            "               ██▓▒▓▒▒▒▒▒▒▒▓▓▓▒▒▓▓▒▒▒▒▒▒▒▒▒▓████▓▓▒▒▒▒▒▓▓▓▓▒▒▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒░▒▓░░░░░▒▒▒▓▓▓▒▒░░▓██   ",
-            "               ██▓▒▓▒▒▒▒▒▒▒▓░░▓▓▓▓▒▓▒▒▒▒▒▓▓▓▓▒░░░░░░░░░░░░▒░░░░░░░░░░░░░▒▓▓▓▓▓░▒▒▒▒░░░░░▓▓▒▒░░███   ",
-            "               ██▓▒▓▒▒▒▒▒▒▒▓▒░░░░▒▓▒▒▒▒▓▓▓▒░░░░░░░░░░▒▒▒▒▒▒░░▒▒▒▒▒░░░░░░░░░▒▓▓▓▓▒▒▒▒░░░░░▒▓▒░▓██    ",
-            "                ██▒▓▒▒▒▓▓▓▒░░░░░░░▒▒▓▓▓▒▒░▒░░░░░░░▒▒▒▒▒░░░░░▒▒▒▒▒▓▓▒░░░░░░░░░▒▓▓▓▓▒▒▒▒░░░░▒▓▒███    ",
-            "                ██▓▓▓▓▓▒░▒▒░░▓▒▒▒▒▒▓▓▓█▒░░░▒▒░░▒▓▒▒░░░░░░░░░░░░░░░░▒▓▓▒░░░░░░▒░░▓▓▓▓▒▒░░░▓▓▓▓██     ",
-            "                █▓▒▒▓▓▓▓▒░░░░▒▓▒▒▒▒██▓██▓░░░░░▓▒░░▒░░░░░▒▓▒░░░░░░░░░░▒▒▒▒░░░░▒▒▒░▒▓▓▓▓▒▒▒▒▓▒▓██     ",
-            "               ██▓▒▒▒▓▓▓▒▒▒▒░▒▒▓▒░▒█▓▒▒██▓██▒▒▒▒▒▒▒░░░░░▒▓░░░░░░░░░░░░░▒▒▓▒░▒░▒▒▒░░▒▓▓▓▓▓▒▓▒███     ",
-            "                ██▒▒▒▓▓▒▒▒▒▒▒▒▒▓▒▓▓███▓▒▒▒▒██▒░░▒░░░░░▒░▒▒░░░░▒░░▒▒▒░░░░░▒▓▒░░░░░░░░░▓▓▓▒▒▓▓██      ",
-            "                ██▓▒▓▒▒▒▒▒▒▒▒▓▓▒▓░░▓█▓██████▒░░░░░▓▓░░░░▒▒░░░▒▓░░░░░░░░░░░▒▒▓░░░░░░░░░▓▓▓▒▓███      ",
-            "                 ██▓▒▒▓▓▓▒▒▒▓▓▒▓▒░▒▓▒░░░░▒▓▒░░░░░▒▓░░░░░▒▒▒░░▒▓▒░░░░░░░░░░░▒▒▓░░░░░░░░░▒▓▓▒▒██      ",
-            "                 ███▓▒▒▓▒▒▒▓▓▒▓▒▓░▒▒░░░░▒▒▓░░░░░░▒▒░░░░░▒▒▒▒▒▒▓▒░░▒▒▓▓░░░░░░▒▒▓░░░░░░░░░▓▓▓▓██      ",
-            "                ███▓▓▓▓▓▒▒▓▓▓██▓▓▓▓▓▓░░▒▒▓░░░░░░░▓▒░░░░░░▓▒▒▒▓▓▓░▒▓▓▓▓▓▒░░░░░▒▒▒░░░░░░░░░▓▓███      ",
-            "                ██▓▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░▒▓▒░░░░░░░▓▒░░░░░░▒▒▒▒▓█▓▒▓▓▓▓▓▒░░░░▒▒▒▒▓░░░░░▒▒░░▒▓██       ",
-            "               ███▒▒░▓▓▓▓▓▓▓▓░░▓▓▓▓▓▒░█▓▓░░░░░░░░▓▓░░░░░░░▓▒▒█▒▒█▒░░▒▓▒░░░▓███▒▒▒░░░░░▓░░░▓███      ",
-            "               ██▓▓░░░░▒▓▓▓▒▒░░░▒▓░░░▓██▒░▓░░░░░░▓▓░░░░░░░▒▒█▓▒▒▒▓▒░░░░░▒███▓▒▓█▓▒░░░░▒▒░░░▒██      ",
-            "              ███▒▓░░░░░░▓▓▒░░░▒▓░░░░▒▒▓░▒▒░░░░░░▓▒▓░░░░░░▒██▒░░░▓▓▒▒▒▒▓███▓▒████▓░░░░▒▒▒░░░▓██     ",
-            "              ███▓▒░░░░░░▓▓▒░░░▓▒░░░▒▒▒▓▒▒░░░░░░░█▒▓▒░░░░░░▓█▒░░░▒██▒▓████▒▓████▒▒░░░░▒▒▒░░░▒██     ",
-            "              ███▓░░░░░░░▓▒▒░░▒▓░░░░▒▒▒▓▒▒░░░░░░░▓██▒░░░░░░▒█▓░▒█▓▓▓████▓▒▓███▓▒▓▒░░░░▒▒▓░░░░▓█     ",
-            "              ███▒░░░░░░▒▓▒░░░▓▒░░░▒▒▒▒▓▒░░░░░░░░▒▒▒▒▒░░░░░▒▒█▒░░░░░▒██▓▒████▓▒▒▓▒░░░░▒▒▒▒░░░▒██    ",
-            "              ██▓░░░░░░▒▓▒░▒░▒▓▒▒▒▒▒▒▒▒▓▒▒░░░░░░░░▒▒▒░▒░▒▒▒▒▒▓█▒░▒▒▒███▓████▒▒▒▒▓▓░░░░▒▒▒▒░░░░▓█    ",
-            "              ██▒░▒░░░▓▓▒▒▒▒▒▒▓▒▒▒▒▒▒▒▓▓▓▒▒░░░░░░░░▒▒░▒▓░▒▒▒▒▒▓▓▒▒▒▓██████▓▒▓▓▓▒▒▓░░░░▒▒▒▒░░░░▒██   ",
-            "             ██▒▒▓▒▓▓▓▓▓▓▓▒░░▒▓▓▒▒▒▒▒▒▒▓██▓▒░░░░░░░▒▒▒░▓█▒▒▒▒▒▒▓████▓███▓█▓▒▓▓▓▓▒▓░░░░▒▒▒░░░░░░██   ",
-            "          ████▒█▓░░░▒░░░▒▒▒░░░▒▓▓▒▒▒▒▓▒▓██▓▓▒▒▒▒▒▒▒▒▓▒▒░█▓▒░▒▒▒▒▓███▓▓█▒▓▓██▓▒▒▓▓▓░░░▒▒▒▒░░░░▓▒▒██  ",
-            "         ███████░░░░▒░░░▒▒▓░░░▒▒▓▓▓▓▒▓███████▓░▒▒▒▒▒▓▓▒▒▓█▒▒▒▒░▓▓▓██▓█▓▒░░▓▓▓█▒▒▒▓▒░▒▒▒▒░░░░░▓▓░██  ",
-            "             ██▒░░░░▒▒░░▒▒▓▓▓▓▓█▒▓▓▒▒█▓▒████▓▒▓▓▒░▒▒▒███▓▓█▒░░▒▒█████▓▓█████▒▒██▓▓▒▒▒▒▒▒░░░░▒▓▒▒▓█  ",
-            "            ███░▒▒░░▒▒▒▒▒▒▒▓▒▒▒▓░░▒▓▒▒█▒▓█▓▓████▓██▓▒░▒▒▒▒▒▒░░░░████▓▒▒█████▒░░▓█▓▒▒▒▒▒▒▒░░▒▒▒▒░▓█  ",
-            "            ██▓▒▓▒░▒▓▒▒▒▒▒▒▒▓░▒▓▒░▒█▒▒▒████▓▓▓▓▓▓██▓░░░░░░░░░░░░▓█▓▓▓▓▓▓▓▓██▒▒▒██▒▒▒▒▒▓▒▒▒▒▒▓▓▒▒██  ",
-            "            ██▓▒▓▒▒░▒▒▒▒▒▓▒▒▒▓▓▓▒░▒█▓▓▓▒░▒▒▓▓▓█▓▒▒▒░░░░░░░░░▓▒░░░▓██████████▓▒██▓▒▒▒▒▓▒▒▒▒░░▒▒▒███  ",
-            "            ███▓░▒▒░░▓▒▒▒▒▓▓▓▓▓▓██▓█▓▒░░▒▓██▒▒▒░░░░░░░░░░░░░▒▒░░░░▒▒▒▒▒▒▓▓▒░▒▓█▓▒▓▒▒▓▒▒▒▒░▒▒▒▒▓██   ",
-            "              ███▒▒▒▒▒▓▓▒▒▒▓▓▒▒▒▒░░▒▓░▒▓▒▒▓▓▒▒░░░░░░░░░░░░░░░░░░░░░░░▓▒▒▒▒▒▒▓██▓▒▒▓▒▒▒▒▒▒▒▒▒▒███    ",
-            "                 ███▒▒▒▓▓▓▓▓▓██▒▒░░▒▒░▒▓▒▒▒░░▓▒░░░░░▒▓▓▒▓▓▓▓▒░░░░░░░░▒▓▓▒░▒▓▓█▒▓▓▓▒▒▒▓▓▒▒▒▓█████    ",
-            "                   ██▓▓▒▒▓▓▒▒▓▒▒▒░░▒▒░▒▒░░░▒▒▒█░░░░░▒▓▒▒▒▒▒▓▓▓▓░░░░░░░▒▓▓▒▒▒█▒▒▒▒▒▒▓▓▓▓▓█████▓█     ",
-            "                    ██▒▒▓▒▒▒▒▒▓▓▒░▒░▒░▒▒░░░▒▓▓▒░░░░░░▓▒▒▒▒▒▒▓▓▒░░░░░░░░▓▒▒██▓▒▒▒▒▒▓███    ██▒██     ",
-            "                     ██▒▒▓▒▒▒▓▒▒▓▓░░░░░░░░░░░▒█▓░░░░░░▒▒▒▒▒▒▒▒░░░░░░░░░▓█▒▒█▒▒▓▒▒███     █▓▒▓█      ",
-            "                      ███▓▓▒▒▒▓▓▒██▒░░░░░░░░░░░▒█▓▒░░░░░▒▒▒░░░░░░░▒▓▓█▓▓▓█▒▒▓▓▒▓███    ██▓▒▓█       ",
-            "            ████████████ ████▓▓█▓▓█▓▓▒░░░░░░░░░░░▓▓▓▒▒░░▒▒░░▒▒▓██▓▓▓▓▓▒▒▒▓▓▒▒▓██      ██▒▒▒██       ",
-            "          ██▒███▒░░░░░▒███    █████████▒░░░░░░░░░▒█▒▓▓▓▓▓▓▓▓████████████▓███▒░▒██    ██▒▒▒██        ",
-            "      ████▓░░░░░░░░░░░░░▒▓██       ██████▒░░░░░░░██▓▒▒▒▓▓▓▓███▓▓█████ ████ █▓▒░▒██  ██▒░░▓█         ",
-            "    ███▓▒░░░░░░░░░░░░░░▒▒▓███  ██████████▓▒▒░░░░▓███▓▓█▓▓██████▓▒▒▓███      ██▒▒▒▓███▒▒▒▓█          ",
-            "   ███▒░░░░░▒░░░░░▒▒▒▒██████   ████▓████████▓▒▒▒██▓████▓████████▓▒░░▒█▓      ▓█▒▒▒▓▓▒▒▒▓█           ",
-            "   ██▓░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓███████████▓█████████████████▓▒▓▓▓▓▓███▒░░░▒▒███      ██▒▓▓██▒▓█            ",
-            "   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓██ ██████████████████████████▓▓░░▒▒▒▒▒▓▓░░░░░░▒█▓█████   ██▓▓▓▓██             ",
-            "   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒██ ███████████████████████████▓█░░░▒▒▒▒█▓░░░░░░░▓█████▓▓█████████▓█             ",
-            "   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▓████████████████████████████████▒░░▒▒▒▓▓░░░░░░░░░█████████▓▓▒▓▓█▓▓▓████          ",
-            "   ██▓▒▒▒▒▒▒▒▒▒▒▒▓██████████████████████████████████▒░▒▓█▓▒░░░░▒░░░▒██████████▒▒▒▒██▓▓▓▓▓▓▓██       ",
-            "    ███▓▒▒▒▒▒▒▒▒▓████████████████████████████████████▓███████▒▓██▓░▓██████▓▓█▒░░░▓███▓█▓█▓▓▓▓█      ",
-            "   ██▓▒▒▒▒▒▒▒▒▒██████████████████████████████▓████████████████▓▒▒░▒█████▓▓▓█▒▒░▒▓███▓▒▒▒▒█▓▓▓████   ",
-            "   ██▒▒▒▒▒▒▒▒██████████████████████████████▓███████████████████▓░▒██████▓▓▓█▓▒▒██▓▓░░░▒▒▒█▓▓█▓▒▒▓██ ",
-        )
+        "                      ███                                                                  █████    ",
+        "                    ██▓▓████                                                       ██████▓▓▒▒░▒██   ",
+        "                   ██▒▒▓▒░▒███                                                 ███▓▓██▓▒░░░▒▓▓▒██   ",
+        "                  █▓▒▒▒▓▓▒░░▒███                                             ██▓▒▒░░░░░░▒▓▒▒▓▒▒██   ",
+        "                 ██▒▒▒▒▓▒▒░░░░▒███                                        ██▓▒▒▒░░░░░▒▓▓▒▒▒▒▓▒▒██   ",
+        "                 █▓▒▒▓▓▒▒▓▒░░░░░▒██                                     ███▒▒▒░░░░░▒▓▓▒▒▒▒▒▒▓▒▒███  ",
+        "                ██▒▒▒▓▒▒▒▒▓▒░░░░░░▓██                                  ██▒▒▒░░░░░▒▓▒▒▓▓▒▒▒▒▒▓▒▒███  ",
+        "                ██▒▒▓▓▒▒▒▒▒▓▒░░░░░░▒██                    ██████████ ██▓▒▒▒▒▒░░▒▓▓▒▓▓▒▒▒▒▒▒▒▒░▒███  ",
+        "                █▓▒▒▓▒▒▒▒▒▒▒▓▒░░░░░░░▓██                ██▓░░░░░░▒▒▓███▓▒▒▒▒▒░░▒░▒▓▒▒▓▒▒▒▒▒▒▒░▒██   ",
+        "               ██▓▒▒▓▒▒▒▒▒▒▒▒▓▓░░░░░░▒▓██               ██▒▒▒▒▒▓████▓▒▒▒▒▒▒▒░░░░▓▓▓▓▒▒▓▒▒▒▒▒▒░▒██   ",
+        "               ██▒▒▓▒▒▒▒▒▒▒▒▓▓▒▓▒▒▒▒▒▒▒▒██▓███████████████▒▒▒▓█████▒▒▒▒▒▒▒▒░░░▒▓▓▒░░░▓▓▒▒▒▒▒░░▓██   ",
+        "               ██▓▒▓▒▒▒▒▒▒▒▓▓▓▒▒▓▓▒▒▒▒▒▒▒▒▒▓████▓▓▒▒▒▒▒▓▓▓▓▒▒▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒░▒▓░░░░░▒▒▒▓▓▓▒▒░░▓██   ",
+        "               ██▓▒▓▒▒▒▒▒▒▒▓░░▓▓▓▓▒▓▒▒▒▒▒▓▓▓▓▒░░░░░░░░░░░░▒░░░░░░░░░░░░░▒▓▓▓▓▓░▒▒▒▒░░░░░▓▓▒▒░░███   ",
+        "               ██▓▒▓▒▒▒▒▒▒▒▓▒░░░░▒▓▒▒▒▒▓▓▓▒░░░░░░░░░░▒▒▒▒▒▒░░▒▒▒▒▒░░░░░░░░░▒▓▓▓▓▒▒▒▒░░░░░▒▓▒░▓██    ",
+        "                ██▒▓▒▒▒▓▓▓▒░░░░░░░▒▒▓▓▓▒▒░▒░░░░░░░▒▒▒▒▒░░░░░▒▒▒▒▒▓▓▒░░░░░░░░░▒▓▓▓▓▒▒▒▒░░░░▒▓▒███    ",
+        "                ██▓▓▓▓▓▒░▒▒░░▓▒▒▒▒▒▓▓▓█▒░░░▒▒░░▒▓▒▒░░░░░░░░░░░░░░░░▒▓▓▒░░░░░░▒░░▓▓▓▓▒▒░░░▓▓▓▓██     ",
+        "                █▓▒▒▓▓▓▓▒░░░░▒▓▒▒▒▒██▓██▓░░░░░▓▒░░▒░░░░░▒▓▒░░░░░░░░░░▒▒▒▒░░░░▒▒▒░▒▓▓▓▓▒▒▒▒▓▒▓██     ",
+        "               ██▓▒▒▒▓▓▓▒▒▒▒░▒▒▓▒░▒█▓▒▒██▓██▒▒▒▒▒▒▒░░░░░▒▓░░░░░░░░░░░░░▒▒▓▒░▒░▒▒▒░░▒▓▓▓▓▓▒▓▒███     ",
+        "                ██▒▒▒▓▓▒▒▒▒▒▒▒▒▓▒▓▓███▓▒▒▒▒██▒░░▒░░░░░▒░▒▒░░░░▒░░▒▒▒░░░░░▒▓▒░░░░░░░░░▓▓▓▒▒▓▓██      ",
+        "                ██▓▒▓▒▒▒▒▒▒▒▒▓▓▒▓░░▓█▓██████▒░░░░░▓▓░░░░▒▒░░░▒▓░░░░░░░░░░░▒▒▓░░░░░░░░░▓▓▓▒▓███      ",
+        "                 ██▓▒▒▓▓▓▒▒▒▓▓▒▓▒░▒▓▒░░░░▒▓▒░░░░░▒▓░░░░░▒▒▒░░▒▓▒░░░░░░░░░░░▒▒▓░░░░░░░░░▒▓▓▒▒██      ",
+        "                 ███▓▒▒▓▒▒▒▓▓▒▓▒▓░▒▒░░░░▒▒▓░░░░░░▒▒░░░░░▒▒▒▒▒▒▓▒░░▒▒▓▓░░░░░░▒▒▓░░░░░░░░░▓▓▓▓██      ",
+        "                ███▓▓▓▓▓▒▒▓▓▓██▓▓▓▓▓▓░░▒▒▓░░░░░░░▓▒░░░░░░▓▒▒▒▓▓▓░▒▓▓▓▓▓▒░░░░░▒▒▒░░░░░░░░░▓▓███      ",
+        "                ██▓▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░▒▓▒░░░░░░░▓▒░░░░░░▒▒▒▒▓█▓▒▓▓▓▓▓▒░░░░▒▒▒▒▓░░░░░▒▒░░▒▓██       ",
+        "               ███▒▒░▓▓▓▓▓▓▓▓░░▓▓▓▓▓▒░█▓▓░░░░░░░░▓▓░░░░░░░▓▒▒█▒▒█▒░░▒▓▒░░░▓███▒▒▒░░░░░▓░░░▓███      ",
+        "               ██▓▓░░░░▒▓▓▓▒▒░░░▒▓░░░▓██▒░▓░░░░░░▓▓░░░░░░░▒▒█▓▒▒▒▓▒░░░░░▒███▓▒▓█▓▒░░░░▒▒░░░▒██      ",
+        "              ███▒▓░░░░░░▓▓▒░░░▒▓░░░░▒▒▓░▒▒░░░░░░▓▒▓░░░░░░▒██▒░░░▓▓▒▒▒▒▓███▓▒████▓░░░░▒▒▒░░░▓██     ",
+        "              ███▓▒░░░░░░▓▓▒░░░▓▒░░░▒▒▒▓▒▒░░░░░░░█▒▓▒░░░░░░▓█▒░░░▒██▒▓████▒▓████▒▒░░░░▒▒▒░░░▒██     ",
+        "              ███▓░░░░░░░▓▒▒░░▒▓░░░░▒▒▒▓▒▒░░░░░░░▓██▒░░░░░░▒█▓░▒█▓▓▓████▓▒▓███▓▒▓▒░░░░▒▒▓░░░░▓█     ",
+        "              ███▒░░░░░░▒▓▒░░░▓▒░░░▒▒▒▒▓▒░░░░░░░░▒▒▒▒▒░░░░░▒▒█▒░░░░░▒██▓▒████▓▒▒▓▒░░░░▒▒▒▒░░░▒██    ",
+        "              ██▓░░░░░░▒▓▒░▒░▒▓▒▒▒▒▒▒▒▒▓▒▒░░░░░░░░▒▒▒░▒░▒▒▒▒▒▓█▒░▒▒▒███▓████▒▒▒▒▓▓░░░░▒▒▒▒░░░░▓█    ",
+        "              ██▒░▒░░░▓▓▒▒▒▒▒▒▓▒▒▒▒▒▒▒▓▓▓▒▒░░░░░░░░▒▒░▒▓░▒▒▒▒▒▓▓▒▒▒▓██████▓▒▓▓▓▒▒▓░░░░▒▒▒▒░░░░▒██   ",
+        "             ██▒▒▓▒▓▓▓▓▓▓▓▒░░▒▓▓▒▒▒▒▒▒▒▓██▓▒░░░░░░░▒▒▒░▓█▒▒▒▒▒▒▓████▓███▓█▓▒▓▓▓▓▒▓░░░░▒▒▒░░░░░░██   ",
+        "          ████▒█▓░░░▒░░░▒▒▒░░░▒▓▓▒▒▒▒▓▒▓██▓▓▒▒▒▒▒▒▒▒▓▒▒░█▓▒░▒▒▒▒▓███▓▓█▒▓▓██▓▒▒▓▓▓░░░▒▒▒▒░░░░▓▒▒██  ",
+        "         ███████░░░░▒░░░▒▒▓░░░▒▒▓▓▓▓▒▓███████▓░▒▒▒▒▒▓▓▒▒▓█▒▒▒▒░▓▓▓██▓█▓▒░░▓▓▓█▒▒▒▓▒░▒▒▒▒░░░░░▓▓░██  ",
+        "             ██▒░░░░▒▒░░▒▒▓▓▓▓▓█▒▓▓▒▒█▓▒████▓▒▓▓▒░▒▒▒███▓▓█▒░░▒▒█████▓▓█████▒▒██▓▓▒▒▒▒▒▒░░░░▒▓▒▒▓█  ",
+        "            ███░▒▒░░▒▒▒▒▒▒▒▓▒▒▒▓░░▒▓▒▒█▒▓█▓▓████▓██▓▒░▒▒▒▒▒▒░░░░████▓▒▒█████▒░░▓█▓▒▒▒▒▒▒▒░░▒▒▒▒░▓█  ",
+        "            ██▓▒▓▒░▒▓▒▒▒▒▒▒▒▓░▒▓▒░▒█▒▒▒████▓▓▓▓▓▓██▓░░░░░░░░░░░░▓█▓▓▓▓▓▓▓▓██▒▒▒██▒▒▒▒▒▓▒▒▒▒▒▓▓▒▒██  ",
+        "            ██▓▒▓▒▒░▒▒▒▒▒▓▒▒▒▓▓▓▒░▒█▓▓▓▒░▒▒▓▓▓█▓▒▒▒░░░░░░░░░▓▒░░░▓██████████▓▒██▓▒▒▒▒▓▒▒▒▒░░▒▒▒███  ",
+        "            ███▓░▒▒░░▓▒▒▒▒▓▓▓▓▓▓██▓█▓▒░░▒▓██▒▒▒░░░░░░░░░░░░░▒▒░░░░▒▒▒▒▒▒▓▓▒░▒▓█▓▒▓▒▒▓▒▒▒▒░▒▒▒▒▓██   ",
+        "              ███▒▒▒▒▒▓▓▒▒▒▓▓▒▒▒▒░░▒▓░▒▓▒▒▓▓▒▒░░░░░░░░░░░░░░░░░░░░░░░▓▒▒▒▒▒▒▓██▓▒▒▓▒▒▒▒▒▒▒▒▒▒███    ",
+        "                 ███▒▒▒▓▓▓▓▓▓██▒▒░░▒▒░▒▓▒▒▒░░▓▒░░░░░▒▓▓▒▓▓▓▓▒░░░░░░░░▒▓▓▒░▒▓▓█▒▓▓▓▒▒▒▓▓▒▒▒▓█████    ",
+        "                   ██▓▓▒▒▓▓▒▒▓▒▒▒░░▒▒░▒▒░░░▒▒▒█░░░░░▒▓▒▒▒▒▒▓▓▓▓░░░░░░░▒▓▓▒▒▒█▒▒▒▒▒▒▓▓▓▓▓█████▓█     ",
+        "                    ██▒▒▓▒▒▒▒▒▓▓▒░▒░▒░▒▒░░░▒▓▓▒░░░░░░▓▒▒▒▒▒▒▓▓▒░░░░░░░░▓▒▒██▓▒▒▒▒▒▓███    ██▒██     ",
+        "                     ██▒▒▓▒▒▒▓▒▒▓▓░░░░░░░░░░░▒█▓░░░░░░▒▒▒▒▒▒▒▒░░░░░░░░░▓█▒▒█▒▒▓▒▒███     █▓▒▓█      ",
+        "                      ███▓▓▒▒▒▓▓▒██▒░░░░░░░░░░░▒█▓▒░░░░░▒▒▒░░░░░░░▒▓▓█▓▓▓█▒▒▓▓▒▓███    ██▓▒▓█       ",
+        "            ████████████ ████▓▓█▓▓█▓▓▒░░░░░░░░░░░▓▓▓▒▒░░▒▒░░▒▒▓██▓▓▓▓▓▒▒▒▓▓▒▒▓██      ██▒▒▒██       ",
+        "          ██▒███▒░░░░░▒███    █████████▒░░░░░░░░░▒█▒▓▓▓▓▓▓▓▓████████████▓███▒░▒██    ██▒▒▒██        ",
+        "      ████▓░░░░░░░░░░░░░▒▓██       ██████▒░░░░░░░██▓▒▒▒▓▓▓▓███▓▓█████ ████ █▓▒░▒██  ██▒░░▓█         ",
+        "    ███▓▒░░░░░░░░░░░░░░▒▒▓███  ██████████▓▒▒░░░░▓███▓▓█▓▓██████▓▒▒▓███      ██▒▒▒▓███▒▒▒▓█          ",
+        "   ███▒░░░░░▒░░░░░▒▒▒▒██████   ████▓████████▓▒▒▒██▓████▓████████▓▒░░▒█▓      ▓█▒▒▒▓▓▒▒▒▓█           ",
+        "   ██▓░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓███████████▓█████████████████▓▒▓▓▓▓▓███▒░░░▒▒███      ██▒▓▓██▒▓█            ",
+        "   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓██ ██████████████████████████▓▓░░▒▒▒▒▒▓▓░░░░░░▒█▓█████   ██▓▓▓▓██             ",
+        "   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒██ ███████████████████████████▓█░░░▒▒▒▒█▓░░░░░░░▓█████▓▓█████████▓█             ",
+        "   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▓████████████████████████████████▒░░▒▒▒▓▓░░░░░░░░░█████████▓▓▒▓▓█▓▓▓████          ",
+        "   ██▓▒▒▒▒▒▒▒▒▒▒▒▓██████████████████████████████████▒░▒▓█▓▒░░░░▒░░░▒██████████▒▒▒▒██▓▓▓▓▓▓▓██       ",
+        "    ███▓▒▒▒▒▒▒▒▒▓████████████████████████████████████▓███████▒▓██▓░▓██████▓▓█▒░░░▓███▓█▓█▓▓▓▓█      ",
+        "   ██▓▒▒▒▒▒▒▒▒▒██████████████████████████████▓████████████████▓▒▒░▒█████▓▓▓█▒▒░▒▓███▓▒▒▒▒█▓▓▓████   ",
+        "   ██▒▒▒▒▒▒▒▒██████████████████████████████▓███████████████████▓░▒██████▓▓▓█▓▒▒██▓▓░░░▒▒▒█▓▓█▓▒▒▓██ ",
+    )
     
-    # Clear the console
     clear_screen()
 
-    # Show initial loading bar
     print("Loading System Components...")
 
-    # Print the logo with animation
     for i, line in enumerate(logo_lines):
-        # Calculate progress percentage
         progress = (i + 1) / len(logo_lines) * 100
         
-        # Print the line with typing animation
         for char in line:
             sys.stdout.write(char)
             sys.stdout.flush()
-            time.sleep(0.000001)  # Fast typing
+            time.sleep(0.000001)
         
-        # Move to next line
         print("")
         
-        # Update loading status at console title (if supported)
-        if os.name == 'nt':  # Windows
+        if os.name == 'nt':
             os.system(f"title Loading: {int(progress)}%")
     
-    # Complete loading
-    sys.stdout.write("\r" + " " * 80)  # Clear line
+    sys.stdout.write("\r" + " " * 80)
     sys.stdout.write("\rSystem Initialized Successfully! ✓\n")
-    os.system(f"title {program_name} - 100% Initalized!")
+    if os.name == 'nt':
+        os.system(f"title {program_name} - 100% Initalized!")
     sys.stdout.flush()
     time.sleep(0.5)
 
     return len(logo_lines[-1]), program_name
 
 if __name__ == "__main__":
+    try:
+        import multiprocessing
+        if os.name == 'nt':  # Windows
+            multiprocessing.set_start_method('spawn')
+        else:
+            multiprocessing.set_start_method('fork')
+    except:
+        pass
+        
     logo_length, program_name = print_animated_logo()
     half_logo_length = ((logo_length - len(program_name)) // 2) - 2
 
@@ -1322,7 +1399,6 @@ if __name__ == "__main__":
     print("Press Ctrl+C at any time to exit gracefully (press twice quickly to force exit)")
     
     try:
-        # Print the absolute path of the amazon.env file
         env_path = Path(__file__).parent.absolute() / 'amazon.env'
         print(f"\nConfig:\n> Environment file location: {env_path}\n{'-'*logo_length}")
         
@@ -1341,7 +1417,6 @@ if __name__ == "__main__":
             print("Error: Required environment variables missing from amazon.env file")
             sys.exit(1)
         
-        # Create a single bot instance
         checker = None
         try:
             checker = AmazonUltraFastBot(
@@ -1352,12 +1427,10 @@ if __name__ == "__main__":
                 check_interval=0.05
             )
             
-            # Run the monitor method
             checker.monitor()
         except KeyboardInterrupt:
             print("\nExiting program...")
         finally:
-            # Make sure cleanup happens if we exit the try block for any reason
             if checker:
                 checker.cleanup()
     except Exception as e:
